@@ -273,6 +273,7 @@ function migrarCustoParaNumero() {
     });
   });
 
+  dadosAlterados_();
   const resumo = 'Migração de custo concluída.\n' +
     convertidos + ' célula(s) convertida(s) de texto pra número.\n' +
     jaEramNumero + ' célula(s) já eram número (sem alteração).\n' +

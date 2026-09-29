@@ -15,9 +15,7 @@ function apiSalvarRisco(token, dados) {
   if (!nome) throw new Error('Informe o nome do risco.');
   const prazoNum = parseInt(dados.PrazoDias, 10);
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ensureSheet_(ss_(), SHEETS.RISCOS, RISCOS_HEADERS);
     const idInformado = sanitize_(dados.ID, 30);
     const existente = idInformado ? readAll_(SHEETS.RISCOS, RISCOS_HEADERS).find(r => r.ID === idInformado) : null;
@@ -42,21 +40,15 @@ function apiSalvarRisco(token, dados) {
     const risco = {};
     RISCOS_HEADERS.forEach((h, i) => risco[h] = linha[i]);
     return { ok: true, risco: risco };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirRisco(token, idRisco) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const risco = readAll_(SHEETS.RISCOS, RISCOS_HEADERS).find(r => r.ID === idRisco);
     if (!risco) throw new Error('Risco não encontrado.');
     ss_().getSheetByName(SHEETS.RISCOS).deleteRow(risco._row);
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }

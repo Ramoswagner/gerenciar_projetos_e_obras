@@ -10,6 +10,7 @@
 
 function apiMeusPacotes(token) {
   const sessao = exigirPapel_(token, ['Responsavel']);
+  prepararAbas_([SHEETS.OBRAS, SHEETS.CRONOGRAMA]);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
   const obraPorId = {}; obras.forEach(o => obraPorId[o.ID] = o);
   return readAll_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS)
@@ -30,9 +31,7 @@ function apiMeusPacotes(token) {
 function apiCheckoffPacote(token, idPacote, novoStatus) {
   const sessao = exigirPapel_(token, ['Responsavel']);
   if (CRONOGRAMA_STATUS.indexOf(novoStatus) < 0) throw new Error('Status inválido.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const pacote = readAll_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS).find(p => p.ID === idPacote);
     if (!pacote) throw new Error('Pacote não encontrado.');
     if (pacote.ResponsavelUserId !== sessao.usuarioId) {
@@ -40,7 +39,5 @@ function apiCheckoffPacote(token, idPacote, novoStatus) {
     }
     atualizarCampos_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS, pacote._row, { Status: novoStatus, AtualizadoEm: nowIso_() });
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }

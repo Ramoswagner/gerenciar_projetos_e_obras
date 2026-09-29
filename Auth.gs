@@ -157,6 +157,7 @@ function testAuth() {
     'Cargo Teste', 'PMO', 'ativo', 'testAuth', nowIso_(), nowIso_()
   ]);
 
+  dadosAlterados_(); // a linha de teste foi gravada fora de comLock_
   try {
     const r1 = login(emailTeste, senhaTeste);
     ok(r1.ok && !!r1.token, 'login com credenciais corretas retorna token');
@@ -193,8 +194,10 @@ function testAuth() {
     try { login(emailTeste, senhaTeste); } catch (e) { bloqueioAtivo = /tentativas incorretas/i.test(e.message); }
     ok(bloqueioAtivo, '5 tentativas erradas bloqueiam mesmo a senha certa por 10min');
   } finally {
+    dadosAlterados_();
     const linhaTeste = readAll_(SHEETS.USUARIOS, USUARIOS_HEADERS).find(u => u.ID === 'TESTE-AUTH');
     if (linhaTeste) ss_().getSheetByName(SHEETS.USUARIOS).deleteRow(linhaTeste._row);
+    dadosAlterados_();
     // limpa também o bloqueio de rate-limit criado no último cenário, pra
     // não atrapalhar uma próxima rodada de teste com o mesmo e-mail
     CacheService.getScriptCache().remove('obrasHb_loginBlock_' + normalizarEmail_(emailTeste));

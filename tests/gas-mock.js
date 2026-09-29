@@ -13,7 +13,7 @@ const crypto = require('crypto');
 
 function criarAmbiente(opcoes) {
   opcoes = opcoes || {};
-  const stats = { chamadasPlanilha: 0 };
+  const stats = { chamadasPlanilha: 0, chamadasCache: 0 };
   const conta = () => { stats.chamadasPlanilha++; };
   const logs = [];
 
@@ -156,7 +156,38 @@ function criarAmbiente(opcoes) {
   const SpreadsheetApp = {
     getActive: () => planilha,
     getActiveSpreadsheet: () => planilha,
-    openById: () => { conta(); return planilha; }
+    openById: () => { conta(); return planilha; },
+    flush: () => {}
+  };
+
+  // Serviço avançado "Sheets" (API v4): várias abas numa só requisição.
+  // Como a API real, omite células vazias no fim de cada linha e linhas
+  // vazias no fim da aba.
+  const Sheets = {
+    Spreadsheets: {
+      Values: {
+        batchGet: (id, opts) => {
+          conta();
+          return {
+            valueRanges: opts.ranges.map(r => {
+              const m = r.match(/^'((?:[^']|'')+)'!A(\d+):([A-Z]+)$/);
+              const nome = m[1].replace(/''/g, "'");
+              const sh = planilha.sheets.find(x => x.name === nome);
+              if (!sh) throw new Error('Unable to parse range: ' + r);
+              const ncols = colunaParaNumero(m[3]);
+              const values = sh.data.slice(+m[2] - 1).map(l => {
+                const o = [];
+                for (let c = 0; c < ncols; c++) o.push(formatarExibicao(l[c]));
+                while (o.length && o[o.length - 1] === '') o.pop();
+                return o;
+              });
+              while (values.length && !values[values.length - 1].length) values.pop();
+              return values.length ? { range: r, values } : { range: r };
+            })
+          };
+        }
+      }
+    }
   };
 
   // ───────────────────────────── cache / propriedades / trava ─────────────────────────────
@@ -170,8 +201,8 @@ function criarAmbiente(opcoes) {
         cacheStore.set(k, String(v));
       },
       remove: (k) => { cacheStore.delete(k); },
-      getAll: (ks) => { const o = {}; ks.forEach(k => { if (cacheStore.has(k)) o[k] = cacheStore.get(k); }); return o; },
-      putAll: (obj) => { Object.keys(obj).forEach(k => CacheService.getScriptCache().put(k, obj[k])); },
+      getAll: (ks) => { stats.chamadasCache++; const o = {}; ks.forEach(k => { if (cacheStore.has(k)) o[k] = cacheStore.get(k); }); return o; },
+      putAll: (obj) => { Object.keys(obj).forEach(k => CacheService.getScriptCache().put(k, obj[k])); stats.chamadasCache++; },
       removeAll: (ks) => { ks.forEach(k => cacheStore.delete(k)); }
     })
   };
@@ -266,14 +297,15 @@ function criarAmbiente(opcoes) {
     deleteTrigger: (t) => { triggers.splice(triggers.indexOf(t), 1); },
     newTrigger: (fn) => {
       const t = { getHandlerFunction: () => fn };
-      const cadeia = { timeBased: () => cadeia, everyWeeks: () => cadeia, onWeekDay: () => cadeia, atHour: () => cadeia, create: () => { triggers.push(t); return t; } };
+      const cadeia = { timeBased: () => cadeia, everyWeeks: () => cadeia, onWeekDay: () => cadeia, atHour: () => cadeia,
+        forSpreadsheet: () => cadeia, onChange: () => cadeia, create: () => { triggers.push(t); return t; } };
       return cadeia;
     },
     WeekDay: { SUNDAY: 'SUNDAY' }
   };
 
   const globais = {
-    SpreadsheetApp, CacheService, PropertiesService, LockService, DriveApp, Utilities, Session, ScriptApp,
+    SpreadsheetApp, Sheets, CacheService, PropertiesService, LockService, DriveApp, Utilities, Session, ScriptApp,
     MimeType: { GOOGLE_SHEETS: 'application/vnd.google-apps.spreadsheet' },
     Logger: { log: (m) => { logs.push(String(m)); } },
     HtmlService: {},
@@ -281,7 +313,7 @@ function criarAmbiente(opcoes) {
   };
 
   return {
-    globais, stats, logs, planilha, cacheStore, props,
+    globais, stats, logs, planilha, cacheStore, props, triggers,
     definirUsuarioAtivo: (email) => { sessao.ativo = email; },
     aba: (nome) => planilha.sheets.find(s => s.name === nome)
   };

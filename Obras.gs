@@ -14,6 +14,7 @@ function apiListarObras(token) {
   exigirEquipe_(token);
   const hit = cacheLer_(CACHE_LISTA_OBRAS);
   if (hit) return hit;
+  prepararAbas_([SHEETS.OBRAS, SHEETS.MANIF, SHEETS.CRONOGRAMA]);
 
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
   const manifs = readAll_(SHEETS.MANIF, MANIF_HEADERS);
@@ -46,6 +47,9 @@ function apiListarObras(token) {
 
 function apiGetObraAdmin(token, id) {
   exigirEquipe_(token);
+  prepararAbas_([SHEETS.OBRAS, SHEETS.EAP, SHEETS.MANIF, SHEETS.REQUISITOS, SHEETS.DECISOES_PRAZO,
+    SHEETS.ATAS, SHEETS.ETAPAS, SHEETS.CRONOGRAMA, SHEETS.RISCOS, SHEETS.RESTRICOES,
+    SHEETS.RESTRICOES_EVIDENCIAS, SHEETS.USUARIOS]);
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
   if (!obra) throw new Error('Obra não encontrada: ' + id);
   obra.StatusCronograma = obra.StatusCronograma || 'Rascunho'; // obras antigas, sem migração de dados
@@ -92,9 +96,7 @@ function apiSalvarObra(token, dados, eapItens) {
   if (linkPlanta && !/^https?:\/\//i.test(linkPlanta)) {
     throw new Error('O link do croqui/planta deve começar com http:// ou https://');
   }
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ss_().getSheetByName(SHEETS.OBRAS);
     const isNew = !dados.ID;
     const id = isNew ? proximoId_('OBR', SHEETS.OBRAS, OBRAS_HEADERS, 'ID') : sanitize_(dados.ID, 20);
@@ -129,9 +131,7 @@ function apiSalvarObra(token, dados, eapItens) {
     salvarEap_(id, eapItens || []);
     invalidarCacheObras_();
     return { ok: true, id: id };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Grava a EAP de UMA obra: só as linhas dessa obra são escritas, as das
@@ -219,9 +219,7 @@ function apiCancelarObra(token, idObra, motivo) {
   const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
   const just = sanitize_(motivo, 2000);
   if (!just) throw new Error('Justifique o cancelamento.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
     if (!obra) throw new Error('Obra não encontrada.');
     if (obra.Status === 'Cancelada') throw new Error('Esta obra já está cancelada.');
@@ -233,9 +231,7 @@ function apiCancelarObra(token, idObra, motivo) {
     invalidarCacheObras_();
     cacheRemover_('pub_obra_' + idObra);
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── DECISÕES DE PRAZO ──
@@ -245,9 +241,7 @@ function apiDecidirPrazo(token, idObra, tipoDecisao, novoPrazo, justificativa) {
   if (TIPO_DECISAO_PRAZO.indexOf(tipoDecisao) < 0) throw new Error('Tipo de decisão inválido.');
   const just = sanitize_(justificativa, 2000);
   if (!just) throw new Error('Justifique a decisão.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
     if (!obra) throw new Error('Obra não encontrada.');
     const prazoAnterior = obra.PrazoManifestacao;
@@ -268,9 +262,7 @@ function apiDecidirPrazo(token, idObra, tipoDecisao, novoPrazo, justificativa) {
     invalidarCacheObras_();
     cacheRemover_('pub_obra_' + idObra);
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── PÚBLICA ──
@@ -292,6 +284,7 @@ function apiGetObraPublica(id) {
   const cacheKey = 'pub_obra_' + id;
   const hit = cacheLer_(cacheKey);
   if (hit) return hit;
+  prepararAbas_([SHEETS.OBRAS, SHEETS.EAP, SHEETS.MANIF]);
 
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
   if (!obra || obra.Status === 'Rascunho') {
@@ -323,9 +316,7 @@ function apiGetObraPublica(id) {
 }
 
 function apiManifestar(id, dados) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
     if (!obra) throw new Error('Obra não encontrada.');
     if (obra.Status !== 'Publicada' && obra.Status !== 'Manifestação encerrada') {
@@ -370,9 +361,7 @@ function apiManifestar(id, dados) {
     invalidarCacheObras_();
 
     return { ok: true, extemporanea: extemporanea };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── ÁREAS PROPOSTAS ──
@@ -403,9 +392,7 @@ function apiListarAreasPropostas(token) {
 
 function apiDecidirAreaProposta(token, id, aprovar, observacoes) {
   exigirPMO_(token);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const prop = readAll_(SHEETS.AREAS_PROP, AREAS_PROP_HEADERS).find(a => a.ID === id);
     if (!prop) throw new Error('Proposta não encontrada: ' + id);
     if (prop.Status !== 'Pendente') throw new Error('Esta proposta já foi decidida.');
@@ -420,9 +407,7 @@ function apiDecidirAreaProposta(token, id, aprovar, observacoes) {
       }
     }
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── ATAS (PULL PLANNING) ──
@@ -453,9 +438,7 @@ function apiCriarRequisito(token, idObra, idManif, descricao, responsavel) {
   exigirEquipe_(token);
   const desc = sanitize_(descricao, 3000);
   if (!desc) throw new Error('Descrição do requisito vazia.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
     if (!obra) throw new Error('Obra não encontrada: ' + idObra);
     const existentes = readAll_(SHEETS.REQUISITOS, REQUISITOS_HEADERS);
@@ -471,9 +454,7 @@ function apiCriarRequisito(token, idObra, idManif, descricao, responsavel) {
       'Pendente', '', '', nowIso_(), nowIso_()
     ]);
     return { ok: true, id: id };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiAtualizarRequisito(token, idRequisito, novoStatus, observacoes) {

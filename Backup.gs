@@ -31,12 +31,14 @@ function backupSemanal() {
   return 'Backup criado: ' + nome + (removidos ? ' · ' + removidos + ' backup(s) antigo(s) removido(s).' : '');
 }
 
-// Rodar UMA vez manualmente pelo editor após o deploy. Substitui trigger
-// anterior se já existir, então é seguro rodar de novo.
-function instalarTriggerBackup() {
+// Rodar UMA vez manualmente pelo editor após o deploy. Substitui os
+// gatilhos anteriores se já existirem, então é seguro rodar de novo.
+// Instala: backup semanal + aviso de mudança de estrutura na planilha
+// (linhas inseridas/apagadas à mão), que invalida o cache de leitura.
+function instalarGatilhos() {
   somenteEditor_();
   ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'backupSemanal')
+    .filter(t => ['backupSemanal', 'aoAlterarPlanilha'].indexOf(t.getHandlerFunction()) >= 0)
     .forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('backupSemanal')
     .timeBased()
@@ -44,5 +46,14 @@ function instalarTriggerBackup() {
     .onWeekDay(ScriptApp.WeekDay.SUNDAY)
     .atHour(3)
     .create();
-  return 'Trigger semanal de backup instalado (domingos por volta das 3h).';
+  ScriptApp.newTrigger('aoAlterarPlanilha')
+    .forSpreadsheet(ss_())
+    .onChange()
+    .create();
+  return 'Gatilhos instalados: backup semanal (domingos ~3h) e atualização do cache quando a planilha muda de estrutura.';
+}
+
+// Nome antigo, mantido para quem já usa pelo editor.
+function instalarTriggerBackup() {
+  return instalarGatilhos();
 }

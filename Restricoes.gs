@@ -29,9 +29,7 @@ function apiSalvarRestricao(token, dados) {
   const descricao = sanitize_(dados.Descricao, 1000);
   if (!descricao) throw new Error('Descreva a restrição.');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ensureSheet_(ss_(), SHEETS.RESTRICOES, RESTRICOES_HEADERS);
     const idInformado = sanitize_(dados.ID, 30);
     const todas = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS);
@@ -58,9 +56,7 @@ function apiSalvarRestricao(token, dados) {
     RESTRICOES_HEADERS.forEach((h, i) => restricao[h] = linha[i]);
     invalidarCacheLookahead_();
     return { ok: true, restricao: restricao };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Transição de status isolada (mesmo princípio de apiValidarCronograma/
@@ -72,9 +68,7 @@ function apiSalvarRestricao(token, dados) {
 function apiMoverRestricao(token, idRestricao, novoStatus) {
   const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
   if (RESTRICAO_STATUS_OPCOES.indexOf(novoStatus) < 0) throw new Error('Status inválido.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const restricao = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS).find(r => r.ID === idRestricao);
     if (!restricao) throw new Error('Restrição não encontrada.');
     const liberada = novoStatus === 'Liberada';
@@ -85,24 +79,18 @@ function apiMoverRestricao(token, idRestricao, novoStatus) {
     });
     invalidarCacheLookahead_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirRestricao(token, idRestricao) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const restricao = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS).find(r => r.ID === idRestricao);
     if (!restricao) throw new Error('Restrição não encontrada.');
     ss_().getSheetByName(SHEETS.RESTRICOES).deleteRow(restricao._row);
     invalidarCacheLookahead_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── EVIDÊNCIAS DE SOLUÇÃO ──
@@ -138,9 +126,7 @@ function apiUploadEvidenciaRestricao(token, idRestricao, nomeArquivo, mimeType, 
   catch (e) { throw new Error('Arquivo inválido — tente novamente.'); }
   if (bytes.length > TAMANHO_MAX_EVIDENCIA_BYTES) throw new Error('Arquivo maior que 8MB — reduza o tamanho antes de enviar.');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const pasta = pastaEvidencias_(restricao.IDObra);
     const blob = Utilities.newBlob(bytes, mimeType, nomeArquivo);
     const arquivo = pasta.createFile(blob);
@@ -155,9 +141,7 @@ function apiUploadEvidenciaRestricao(token, idRestricao, nomeArquivo, mimeType, 
     RESTRICOES_EVIDENCIAS_HEADERS.forEach((h, i) => evidencia[h] = linha[i]);
     invalidarCacheLookahead_();
     return { ok: true, evidencia: evidencia };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Leitura leve de evidências de UMA restrição só — usado pelo modal de
@@ -170,9 +154,7 @@ function apiListarEvidenciasRestricao(token, idRestricao) {
 
 function apiExcluirEvidenciaRestricao(token, idEvidencia) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const evidencia = readAll_(SHEETS.RESTRICOES_EVIDENCIAS, RESTRICOES_EVIDENCIAS_HEADERS).find(e => e.ID === idEvidencia);
     if (!evidencia) throw new Error('Evidência não encontrada.');
     try { DriveApp.getFileById(evidencia.FileId).setTrashed(true); }
@@ -180,9 +162,7 @@ function apiExcluirEvidenciaRestricao(token, idEvidencia) {
     ss_().getSheetByName(SHEETS.RESTRICOES_EVIDENCIAS).deleteRow(evidencia._row);
     invalidarCacheLookahead_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── LOOKAHEAD ──
@@ -226,6 +206,7 @@ function apiLookahead(token) {
   exigirEquipe_(token);
   const hit = cacheLer_(CACHE_LOOKAHEAD);
   if (hit) return hit;
+  prepararAbas_([SHEETS.RESTRICOES, SHEETS.OBRAS, SHEETS.CRONOGRAMA, SHEETS.RESTRICOES_EVIDENCIAS]);
 
   const restricoes = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);

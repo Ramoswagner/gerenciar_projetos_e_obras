@@ -3,6 +3,7 @@
   "private": true,
   "description": "Gestão de projetos e obras — Hospital da Baleia (Google Apps Script)",
   "scripts": {
-    "test": "node tests/run.js"
+    "test": "node tests/run.js",
+    "bench": "node tests/bench.js"
   }
 }

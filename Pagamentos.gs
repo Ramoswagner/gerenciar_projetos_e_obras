@@ -37,9 +37,7 @@ function apiSalvarParcela(token, dados) {
   const valor = parseMoedaServidor_(dados.ValorPrevisto);
   if (valor === null) throw new Error('Valor previsto inválido — use só números (ex.: 1500 ou 1500,50).');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ensureSheet_(ss_(), SHEETS.PLANO_PAGAMENTO, PLANO_PAGAMENTO_HEADERS);
     const idInformado = sanitize_(dados.ID, 30);
     const todas = readAll_(SHEETS.PLANO_PAGAMENTO, PLANO_PAGAMENTO_HEADERS);
@@ -60,26 +58,20 @@ function apiSalvarParcela(token, dados) {
     PLANO_PAGAMENTO_HEADERS.forEach((h, i) => parcela[h] = linha[i]);
     invalidarCachePagamentosResumo_();
     return { ok: true, parcela: parcela };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirParcela(token, idParcela) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
   const temMedicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).some(m => m.IDParcela === idParcela);
   if (temMedicao) throw new Error('Esta parcela já tem medição registrada — não pode ser excluída (preserva o histórico financeiro).');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const parcela = readAll_(SHEETS.PLANO_PAGAMENTO, PLANO_PAGAMENTO_HEADERS).find(p => p.ID === idParcela);
     if (!parcela) throw new Error('Parcela não encontrada.');
     ss_().getSheetByName(SHEETS.PLANO_PAGAMENTO).deleteRow(parcela._row);
     invalidarCachePagamentosResumo_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── MEDIÇÕES ──
@@ -96,9 +88,7 @@ function apiRegistrarMedicao(token, dados) {
   const valor = parseMoedaServidor_(dados.ValorMedido);
   if (valor === null || valor <= 0) throw new Error('Valor medido inválido — use só números maiores que zero.');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ensureSheet_(ss_(), SHEETS.MEDICOES, MEDICOES_HEADERS);
     const linha = [
       proximoId_('MED', SHEETS.MEDICOES, MEDICOES_HEADERS, 'ID'),
@@ -112,9 +102,7 @@ function apiRegistrarMedicao(token, dados) {
     MEDICOES_HEADERS.forEach((h, i) => medicao[h] = linha[i]);
     invalidarCachePagamentosResumo_();
     return { ok: true, medicao: medicao };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Aprovação SEMPRE do PMO — mesmo princípio de apiValidarCronograma. Uma
@@ -123,9 +111,7 @@ function apiRegistrarMedicao(token, dados) {
 // Restrições, que podem ir e voltar de status livremente).
 function apiAprovarMedicao(token, idMedicao, aprovado, observacoes) {
   const sessao = exigirPMO_(token);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const medicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).find(m => m.ID === idMedicao);
     if (!medicao) throw new Error('Medição não encontrada.');
     if (medicao.StatusAprovacao !== 'Pendente') throw new Error('Esta medição já foi decidida e não pode ser alterada.');
@@ -137,25 +123,19 @@ function apiAprovarMedicao(token, idMedicao, aprovado, observacoes) {
     });
     invalidarCachePagamentosResumo_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirMedicao(token, idMedicao) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const medicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).find(m => m.ID === idMedicao);
     if (!medicao) throw new Error('Medição não encontrada.');
     if (medicao.StatusAprovacao !== 'Pendente') throw new Error('Medição já decidida não pode ser excluída (preserva o histórico financeiro).');
     ss_().getSheetByName(SHEETS.MEDICOES).deleteRow(medicao._row);
     invalidarCachePagamentosResumo_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── EVIDÊNCIA DE MEDIÇÃO ──
@@ -175,9 +155,7 @@ function apiUploadEvidenciaMedicao(token, idMedicao, nomeArquivo, mimeType, base
   catch (e) { throw new Error('Arquivo inválido — tente novamente.'); }
   if (bytes.length > TAMANHO_MAX_EVIDENCIA_BYTES) throw new Error('Arquivo maior que 8MB — reduza o tamanho antes de enviar.');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const pasta = pastaEvidencias_(medicao.IDObra);
     const blob = Utilities.newBlob(bytes, mimeType, nomeArquivo);
     const arquivo = pasta.createFile(blob);
@@ -191,9 +169,7 @@ function apiUploadEvidenciaMedicao(token, idMedicao, nomeArquivo, mimeType, base
     const evidencia = {};
     MEDICOES_EVIDENCIAS_HEADERS.forEach((h, i) => evidencia[h] = linha[i]);
     return { ok: true, evidencia: evidencia };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Regex com barra-barra é seguro aqui — a armadilha documentada do projeto
@@ -211,9 +187,7 @@ function apiAnexarLinkEvidenciaMedicao(token, idMedicao, descricao, link) {
   if (!linkValidoServidor_(linkOk)) throw new Error('Informe um link válido, começando com http:// ou https://.');
   const descricaoOk = sanitize_(descricao, 200) || 'Link de evidência';
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ensureSheet_(ss_(), SHEETS.MEDICOES_EVIDENCIAS, MEDICOES_EVIDENCIAS_HEADERS);
     const linha = [
       proximoId_('MEVID', SHEETS.MEDICOES_EVIDENCIAS, MEDICOES_EVIDENCIAS_HEADERS, 'ID'),
@@ -224,16 +198,12 @@ function apiAnexarLinkEvidenciaMedicao(token, idMedicao, descricao, link) {
     const evidencia = {};
     MEDICOES_EVIDENCIAS_HEADERS.forEach((h, i) => evidencia[h] = linha[i]);
     return { ok: true, evidencia: evidencia };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirEvidenciaMedicao(token, idEvidencia) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const evidencia = readAll_(SHEETS.MEDICOES_EVIDENCIAS, MEDICOES_EVIDENCIAS_HEADERS).find(e => e.ID === idEvidencia);
     if (!evidencia) throw new Error('Evidência não encontrada.');
     if (evidencia.Tipo === 'Upload' && evidencia.FileId) {
@@ -242,9 +212,7 @@ function apiExcluirEvidenciaMedicao(token, idEvidencia) {
     }
     ss_().getSheetByName(SHEETS.MEDICOES_EVIDENCIAS).deleteRow(evidencia._row);
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── CURVA S ──
@@ -324,6 +292,7 @@ function curvaSFisicoFinanceira_(baseline, medicoesAprovadas) {
 
 function apiCurvaS(token, idObra) {
   exigirEquipe_(token);
+  prepararAbas_([SHEETS.BASELINE, SHEETS.MEDICOES]);
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS).filter(b => b.IDObra === idObra);
   const medicoesAprovadas = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS)
     .filter(m => m.IDObra === idObra && m.StatusAprovacao === 'Aprovada');
@@ -346,6 +315,7 @@ function apiPagamentosResumo(token) {
   exigirEquipe_(token);
   const hit = cacheLer_(CACHE_PAGAMENTOS_RESUMO);
   if (hit) return hit;
+  prepararAbas_([SHEETS.BASELINE, SHEETS.OBRAS, SHEETS.MEDICOES]);
 
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
@@ -384,6 +354,7 @@ function apiPagamentosResumo(token) {
 // agrupar sem chamadas extras.
 function apiPagamentosObra(token, idObra) {
   exigirEquipe_(token);
+  prepararAbas_([SHEETS.BASELINE, SHEETS.PLANO_PAGAMENTO, SHEETS.MEDICOES, SHEETS.MEDICOES_EVIDENCIAS, SHEETS.OBRAS]);
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS).filter(b => b.IDObra === idObra)
     .sort((a, b) => String(a.DataInicioPrevista || '9999').localeCompare(String(b.DataInicioPrevista || '9999')));
   const parcelas = readAll_(SHEETS.PLANO_PAGAMENTO, PLANO_PAGAMENTO_HEADERS).filter(p => p.IDObra === idObra);

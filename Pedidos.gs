@@ -12,9 +12,7 @@
 // ────────────────────────────────────────────── PÚBLICA ──
 
 function apiCriarPedido(dados) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     // honeypot anti-spam: campo invisível que só um robô preencheria
     if (sanitize_(dados._hp, 50)) {
       return { ok: true, id: 'PED-0000-000', token: '', linkAcompanhamento: '' };
@@ -54,9 +52,7 @@ function apiCriarPedido(dados) {
 
     invalidarCachePedidos_();
     return { ok: true, id: id, token: token, linkAcompanhamento: linkAcompanhamentoPedido_(id, token) };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Contexto público para o formulário de novo pedido — busca as listas de
@@ -86,9 +82,7 @@ function historicoDoPedido_(idPedido) {
 // Resposta do solicitante quando a Engenharia pediu mais informações.
 // Valida o token como apiGetPedidoStatus e devolve o pedido para análise.
 function apiResponderPedido(id, token, texto, linkEvidencia) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
     if (!pedido || !token || pedido.Token !== token) {
       throw new Error('Pedido não encontrado ou link de acompanhamento inválido.');
@@ -109,18 +103,14 @@ function apiResponderPedido(id, token, texto, linkEvidencia) {
     cacheRemover_('pub_ped_' + id + '_' + token);
     invalidarCachePedidos_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Cancelamento é do próprio solicitante, via link de acompanhamento — só
 // possível enquanto o pedido ainda está em análise (uma vez Aceito, virou
 // obra e cancela por lá; Recusado/Cancelado já são estados finais).
 function apiCancelarPedido(id, token, motivo) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
     if (!pedido || !token || pedido.Token !== token) {
       throw new Error('Pedido não encontrado ou link de acompanhamento inválido.');
@@ -138,9 +128,7 @@ function apiCancelarPedido(id, token, motivo) {
     cacheRemover_('pub_ped_' + id + '_' + token);
     invalidarCachePedidos_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiGetPedidoStatus(id, token) {

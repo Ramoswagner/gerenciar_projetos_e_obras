@@ -45,6 +45,13 @@ function criarUsuario(s, papel, email) {
   return s.g('login')(email, 'senha-' + papel).token;
 }
 
+// Simula o início de uma nova chamada ao servidor: no Apps Script cada
+// execução começa com as variáveis globais zeradas (a memória some, o
+// CacheService e as propriedades continuam).
+function novaExecucao(s) {
+  s.g('MEMORIA_ABAS_ = {}; VERSAO_DADOS_ = null; SS_EXECUCAO_ = null; EM_ESCRITA_ = false');
+}
+
 const testes = [];
 const teste = (nome, fn) => testes.push({ nome, fn });
 
@@ -214,6 +221,93 @@ teste('listas grandes não quebram por causa do limite do cache', () => {
   const lista = s.g('apiListarPedidos')(s.token);
   assert.strictEqual(lista.length, 800);
   assert.strictEqual(s.g('apiKanban')(s.token).pedidos.length, 800);
+});
+
+// ─────────────────────────────── leitura rápida / cache ───────────────────────────────
+
+teste('depois de uma gravação a próxima leitura nunca mostra o dado antigo', () => {
+  const s = sistemaComPmo();
+  const id = s.g('apiSalvarObra')(s.token, { Titulo: 'Obra', PrazoManifestacao: '2030-01-01' }, []).id;
+  novaExecucao(s);
+  assert.strictEqual(s.g('apiGetObraAdmin')(s.token, id).obra.Status, 'Rascunho');
+  assert.strictEqual(s.g('apiListarObras')(s.token)[0].Status, 'Rascunho');
+  novaExecucao(s);
+  s.g('apiPublicarObra')(s.token, id);
+  novaExecucao(s);
+  assert.strictEqual(s.g('apiGetObraAdmin')(s.token, id).obra.Status, 'Publicada');
+  assert.strictEqual(s.g('apiListarObras')(s.token)[0].Status, 'Publicada');
+  assert.strictEqual(s.g('apiKanban')(s.token).obras[0].Status, 'Publicada');
+});
+
+teste('edição manual na planilha (onEdit) invalida o cache', () => {
+  const s = sistemaComPmo();
+  const id = s.g('apiSalvarObra')(s.token, { Titulo: 'Antes' }, []).id;
+  novaExecucao(s);
+  assert.strictEqual(s.g('apiGetObraAdmin')(s.token, id).obra.Titulo, 'Antes');
+  s.amb.aba('Obras').data[1][1] = 'Depois';
+  novaExecucao(s);
+  s.g('onEdit')();
+  novaExecucao(s);
+  assert.strictEqual(s.g('apiGetObraAdmin')(s.token, id).obra.Titulo, 'Depois');
+});
+
+teste('gravação usa a posição real da linha mesmo com o cache desatualizado', () => {
+  const s = sistemaComPmo();
+  const a = s.g('apiSalvarObra')(s.token, { Titulo: 'A' }, []).id;
+  const b = s.g('apiSalvarObra')(s.token, { Titulo: 'B' }, []).id;
+  novaExecucao(s);
+  s.g('apiListarObras')(s.token); // cache guarda B na linha 3
+  s.amb.aba('Obras').deleteRow(2); // alguém apaga a linha de A à mão, sem gatilho
+  novaExecucao(s);
+  s.g('apiMudarStatus')(s.token, b, 'Publicada');
+  const col = s.g('OBRAS_HEADERS').indexOf('Status');
+  assert.strictEqual(s.amb.aba('Obras').data[1][0], b);
+  assert.strictEqual(s.amb.aba('Obras').data[1][col], 'Publicada');
+});
+
+teste('leitura em lote (API do Sheets) devolve exatamente o mesmo que a leitura aba a aba', () => {
+  const s = sistemaComPmo();
+  s.g('criarProjetosExemplo')();
+  const abas = ['Obras', 'EAP', 'Manifestacoes', 'Cronograma', 'Usuarios', 'Baseline'];
+  novaExecucao(s);
+  const lote = s.g('lerAbasDaPlanilha_')(abas.map(n => [n, s.g('cabecalhosDaAba_')(n).length]));
+  abas.forEach(n => {
+    const uma = s.g('lerAbaDaPlanilha_')(n, s.g('cabecalhosDaAba_')(n).length);
+    assert.strictEqual(JSON.stringify(lote[n]), JSON.stringify(uma), 'aba ' + n);
+  });
+});
+
+teste('aba grande passa pelo cache em partes sem perder nada', () => {
+  const s = sistemaComPmo();
+  const sh = s.amb.aba('Cronograma');
+  const H = s.g('CRONOGRAMA_HEADERS');
+  for (let i = 0; i < 1500; i++) {
+    const l = H.map(() => ''); l[0] = 'OBR-2026-001-C' + i; l[1] = 'OBR-2026-001'; l[4] = 'Atividade com acentuação ' + i + ' ' + 'ç'.repeat(40);
+    sh.appendRow(l);
+  }
+  novaExecucao(s);
+  const direto = JSON.stringify(s.g('readAll_')('Cronograma', H));
+  novaExecucao(s);
+  const antes = s.amb.stats.chamadasPlanilha;
+  const doCache = JSON.stringify(s.g('readAll_')('Cronograma', H));
+  assert.strictEqual(s.amb.stats.chamadasPlanilha, antes, 'a 2ª leitura deveria vir do cache');
+  assert.strictEqual(doCache, direto);
+});
+
+teste('tela aberta de novo (cache quente) não toca na planilha', () => {
+  const s = sistemaComPmo();
+  s.g('criarProjetosExemplo')();
+  const id = s.g('apiListarObras')(s.token)[0].ID;
+  novaExecucao(s);
+  s.g('apiGetObraAdmin')(s.token, id);
+  s.g('apiKanban')(s.token);
+  s.g('apiLookahead')(s.token);
+  novaExecucao(s);
+  const antes = s.amb.stats.chamadasPlanilha;
+  s.g('apiGetObraAdmin')(s.token, id);
+  s.g('apiKanban')(s.token);
+  s.g('apiLookahead')(s.token);
+  assert.strictEqual(s.amb.stats.chamadasPlanilha - antes, 0);
 });
 
 // ─────────────────────────────── fluxo completo ───────────────────────────────

@@ -33,21 +33,16 @@ function kanbanBucketObra_(obra) {
   return { bucket: 'Manifestação', subfase: obra.Status }; // Rascunho / Publicada / Manifestação encerrada
 }
 
-// Cache curto (120s), SEM invalidação explícita de propósito: o Kanban
-// agrega Pedidos+Obras+Cronograma, escritos em 4 arquivos diferentes —
-// perseguir invalidação em cada um deles custaria mais risco (fácil
-// esquecer um ponto) do que o benefício vale aqui, já que é um quadro de
-// visão geral (não uma tela de detalhe/decisão). No pior caso, o Kanban
-// fica até 2min desatualizado — aceitável pra um board de "onde as coisas
-// estão", igual a outras aproximações já assumidas neste projeto (%
-// decorativo do Gantt/progresso). Detalhe de cada item (apiGetObraAdmin
-// etc.) nunca passa por este cache.
+// Cache de 120s com a versão dos dados na chave (cacheLer_/cacheGravar_):
+// qualquer gravação em Pedidos, Obras ou Cronograma já invalida o quadro,
+// sem precisar lembrar de limpar esta chave em cada escritor.
 const CACHE_KANBAN = 'admin_kanban_v1';
 
 function apiKanban(token) {
   exigirEquipe_(token);
   const hit = cacheLer_(CACHE_KANBAN);
   if (hit) return hit;
+  prepararAbas_([SHEETS.PEDIDOS, SHEETS.CRONOGRAMA, SHEETS.OBRAS]);
 
   const pedidos = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS)
     .map(p => {

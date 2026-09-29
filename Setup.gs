@@ -295,6 +295,38 @@ const ENCERRAMENTO_ASSINATURAS_HEADERS = [
   'ID', 'IDObra', 'NomeSignatario', 'Cargo', 'Status', 'AssinadoEm', 'IDUsuario'
 ];
 
+// Cabeçalho de cada aba de dados, pelo nome — usado pela leitura em lote
+// (prepararAbas_ em Helpers.gs) para saber quantas colunas buscar.
+function cabecalhosDaAba_(nome) {
+  const mapa = {};
+  mapa[SHEETS.OBRAS] = OBRAS_HEADERS;
+  mapa[SHEETS.EAP] = EAP_HEADERS;
+  mapa[SHEETS.MANIF] = MANIF_HEADERS;
+  mapa[SHEETS.PEDIDOS] = PEDIDOS_HEADERS;
+  mapa[SHEETS.REQUISITOS] = REQUISITOS_HEADERS;
+  mapa[SHEETS.PEDIDO_HIST] = PEDIDO_HIST_HEADERS;
+  mapa[SHEETS.AREAS_PROP] = AREAS_PROP_HEADERS;
+  mapa[SHEETS.DECISOES_PRAZO] = DECISOES_PRAZO_HEADERS;
+  mapa[SHEETS.ATAS] = ATAS_HEADERS;
+  mapa[SHEETS.ETAPAS] = ETAPAS_HEADERS;
+  mapa[SHEETS.CRONOGRAMA] = CRONOGRAMA_HEADERS;
+  mapa[SHEETS.USUARIOS] = USUARIOS_HEADERS;
+  mapa[SHEETS.BASELINE] = BASELINE_HEADERS;
+  mapa[SHEETS.PLANO_PAGAMENTO] = PLANO_PAGAMENTO_HEADERS;
+  mapa[SHEETS.MEDICOES] = MEDICOES_HEADERS;
+  mapa[SHEETS.RESTRICOES] = RESTRICOES_HEADERS;
+  mapa[SHEETS.COMPROMISSO_SEMANAL] = COMPROMISSO_SEMANAL_HEADERS;
+  mapa[SHEETS.ENCERRAMENTO_CHECKLIST] = ENCERRAMENTO_CHECKLIST_HEADERS;
+  mapa[SHEETS.ENCERRAMENTO_DOCUMENTOS] = ENCERRAMENTO_DOCUMENTOS_HEADERS;
+  mapa[SHEETS.ENCERRAMENTO_ASSINATURAS] = ENCERRAMENTO_ASSINATURAS_HEADERS;
+  mapa[SHEETS.RISCOS] = RISCOS_HEADERS;
+  mapa[SHEETS.RESTRICOES_EVIDENCIAS] = RESTRICOES_EVIDENCIAS_HEADERS;
+  mapa[SHEETS.MEDICOES_EVIDENCIAS] = MEDICOES_EVIDENCIAS_HEADERS;
+  const h = mapa[nome];
+  if (!h) throw new Error('Aba sem cabeçalho registrado: ' + nome);
+  return h;
+}
+
 // ────────────────────────────────────────────── SETUP ──
 
 function setup() {
@@ -384,6 +416,7 @@ function setup() {
   const medicoes = ss.getSheetByName(SHEETS.MEDICOES);
   if (medicoes) medicoes.getRange('E2:E').setNumberFormat('0.00');
 
+  dadosAlterados_();
   return 'Setup concluído. Abas: ' + Object.keys(SHEETS).length + '. Login agora é por Usuarios (ver Auth.gs) — rode semearPrimeiroPmo no editor (Usuarios.gs) se esta for uma planilha nova.';
 }
 

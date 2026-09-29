@@ -34,9 +34,7 @@ function apiSalvarItemChecklist(token, dados) {
   const item = sanitize_(dados.ItemChecklist, 200);
   if (!item) throw new Error('Descreva o item do checklist.');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ensureSheet_(ss_(), SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS);
     const idInformado = sanitize_(dados.ID, 30);
     const existente = idInformado ? readAll_(SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS).find(c => c.ID === idInformado) : null;
@@ -55,9 +53,7 @@ function apiSalvarItemChecklist(token, dados) {
     ENCERRAMENTO_CHECKLIST_HEADERS.forEach((h, i) => item2[h] = linha[i]);
     invalidarCacheEncerramentoResumo_();
     return { ok: true, item: item2 };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Reversível de propósito — é revisão técnica interna durante o
@@ -68,9 +64,7 @@ function apiPosicionarItemChecklist(token, idItem, posicionamento, observacaoObj
   if (posicionamento === 'Objeção' && !sanitize_(observacaoObjecao, 1000)) {
     throw new Error('Descreva a objeção.');
   }
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const item = readAll_(SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS).find(c => c.ID === idItem);
     if (!item) throw new Error('Item de checklist não encontrado.');
     atualizarCampos_(SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS, item._row, {
@@ -80,24 +74,18 @@ function apiPosicionarItemChecklist(token, idItem, posicionamento, observacaoObj
     });
     invalidarCacheEncerramentoResumo_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirItemChecklist(token, idItem) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const item = readAll_(SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS).find(c => c.ID === idItem);
     if (!item) throw new Error('Item de checklist não encontrado.');
     ss_().getSheetByName(SHEETS.ENCERRAMENTO_CHECKLIST).deleteRow(item._row);
     invalidarCacheEncerramentoResumo_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── DOCUMENTOS AS-BUILT ──
@@ -131,9 +119,7 @@ function apiUploadDocumentoEncerramento(token, idObra, nomeArquivo, mimeType, ba
   catch (e) { throw new Error('Arquivo inválido — tente novamente.'); }
   if (bytes.length > TAMANHO_MAX_EVIDENCIA_BYTES) throw new Error('Arquivo maior que 8MB — reduza o tamanho antes de enviar.');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const pasta = pastaDocumentosEncerramento_(idObra);
     const blob = Utilities.newBlob(bytes, mimeType, nomeArquivo);
     const arquivo = pasta.createFile(blob);
@@ -147,23 +133,17 @@ function apiUploadDocumentoEncerramento(token, idObra, nomeArquivo, mimeType, ba
     const documento = {};
     ENCERRAMENTO_DOCUMENTOS_HEADERS.forEach((h, i) => documento[h] = linha[i]);
     return { ok: true, documento: documento };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirDocumentoEncerramento(token, idDocumento) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const documento = readAll_(SHEETS.ENCERRAMENTO_DOCUMENTOS, ENCERRAMENTO_DOCUMENTOS_HEADERS).find(d => d.ID === idDocumento);
     if (!documento) throw new Error('Documento não encontrado.');
     ss_().getSheetByName(SHEETS.ENCERRAMENTO_DOCUMENTOS).deleteRow(documento._row);
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── ASSINATURAS ──
@@ -173,9 +153,7 @@ function apiSalvarSignatario(token, idObra, nomeSignatario, cargo, idUsuario) {
   idObra = sanitize_(idObra, 30);
   nomeSignatario = sanitize_(nomeSignatario, 120);
   if (!idObra || !nomeSignatario) throw new Error('Informe o nome do signatário.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const sh = ensureSheet_(ss_(), SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS);
     const linha = [
       proximoId_('EA', SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS, 'ID'),
@@ -186,25 +164,19 @@ function apiSalvarSignatario(token, idObra, nomeSignatario, cargo, idUsuario) {
     ENCERRAMENTO_ASSINATURAS_HEADERS.forEach((h, i) => signatario[h] = linha[i]);
     invalidarCacheEncerramentoResumo_();
     return { ok: true, signatario: signatario };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiExcluirSignatario(token, idSignatario) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const signatario = readAll_(SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS).find(s => s.ID === idSignatario);
     if (!signatario) throw new Error('Signatário não encontrado.');
     if (signatario.Status === 'Assinado') throw new Error('Signatário já assinou — não pode ser removido (preserva o histórico de aceite).');
     ss_().getSheetByName(SHEETS.ENCERRAMENTO_ASSINATURAS).deleteRow(signatario._row);
     invalidarCacheEncerramentoResumo_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Assinar exige que TODO o checklist já esteja resolvido (nenhum item
@@ -217,9 +189,7 @@ function apiExcluirSignatario(token, idSignatario) {
 // já obtida fora do sistema, prática comum em handover de obra.
 function apiAssinarDocumento(token, idAssinatura) {
   const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const signatario = readAll_(SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS).find(s => s.ID === idAssinatura);
     if (!signatario) throw new Error('Signatário não encontrado.');
     if (signatario.Status === 'Assinado') throw new Error('Este signatário já assinou.');
@@ -235,9 +205,7 @@ function apiAssinarDocumento(token, idAssinatura) {
     });
     invalidarCacheEncerramentoResumo_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // ────────────────────────────────────────────── FINALIZAR ──
@@ -272,6 +240,7 @@ function apiEncerramentoResumo(token) {
   exigirEquipe_(token);
   const hit = cacheLer_(CACHE_ENCERRAMENTO_RESUMO);
   if (hit) return hit;
+  prepararAbas_([SHEETS.OBRAS, SHEETS.ENCERRAMENTO_CHECKLIST, SHEETS.ENCERRAMENTO_ASSINATURAS]);
 
   const elegiveis = ['Liberada', 'Em execução', 'Concluída', 'Finalizado'];
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).filter(o => elegiveis.indexOf(o.Status) >= 0);
@@ -294,6 +263,7 @@ function apiEncerramentoResumo(token) {
 
 function apiGetEncerramento(token, idObra) {
   exigirEquipe_(token);
+  prepararAbas_([SHEETS.OBRAS, SHEETS.ENCERRAMENTO_CHECKLIST, SHEETS.ENCERRAMENTO_DOCUMENTOS, SHEETS.ENCERRAMENTO_ASSINATURAS]);
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
   if (!obra) throw new Error('Obra não encontrada.');
   return {

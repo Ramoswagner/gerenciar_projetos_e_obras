@@ -39,9 +39,7 @@ function apiComprometerPacote(token, idObra, idPacote, responsavelNome) {
   const inicioSemana = isoDoDate_(segunda);
   const fimSemana = fimDaSemana_(inicioSemana);
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const todos = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS);
     if (todos.some(c => c.IDPacote === idPacote && c.DataInicioSemana === inicioSemana)) {
       throw new Error('Este pacote já tem um compromisso registrado na semana atual.');
@@ -58,9 +56,7 @@ function apiComprometerPacote(token, idObra, idPacote, responsavelNome) {
     COMPROMISSO_SEMANAL_HEADERS.forEach((h, i) => compromisso[h] = linha[i]);
     invalidarCacheCompromissoSemanal_();
     return { ok: true, compromisso: compromisso };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function apiMarcarCompromisso(token, idCompromisso, status, categoriaNaoCumprimento, detalhes) {
@@ -69,9 +65,7 @@ function apiMarcarCompromisso(token, idCompromisso, status, categoriaNaoCumprime
   if (status === 'Não cumprido' && CATEGORIAS_NAO_CUMPRIMENTO.indexOf(categoriaNaoCumprimento) < 0) {
     throw new Error('Selecione uma categoria de não-cumprimento válida.');
   }
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const compromisso = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS).find(c => c.ID === idCompromisso);
     if (!compromisso) throw new Error('Compromisso não encontrado.');
     const naoCumprido = status === 'Não cumprido';
@@ -83,9 +77,7 @@ function apiMarcarCompromisso(token, idCompromisso, status, categoriaNaoCumprime
     });
     invalidarCacheCompromissoSemanal_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // Só remove um compromisso ainda "Planejado" (desfazer um lançamento por
@@ -93,18 +85,14 @@ function apiMarcarCompromisso(token, idCompromisso, status, categoriaNaoCumprime
 // cumprido, vira histórico do PPC e não pode mais sumir.
 function apiExcluirCompromisso(token, idCompromisso) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const compromisso = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS).find(c => c.ID === idCompromisso);
     if (!compromisso) throw new Error('Compromisso não encontrado.');
     if (compromisso.Status !== 'Planejado') throw new Error('Compromisso já decidido não pode ser excluído (preserva o histórico de PPC).');
     ss_().getSheetByName(SHEETS.COMPROMISSO_SEMANAL).deleteRow(compromisso._row);
     invalidarCacheCompromissoSemanal_();
     return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 // PPC = Cumpridos / (Cumpridos+Não cumpridos). "Planejado" (semana ainda
@@ -122,6 +110,7 @@ function calcularPPC_(compromissosDaSemana) {
 // atual — alimenta a lista de "comprometer" na tela.
 function apiPacotesParaComprometer(token, idObra) {
   exigirEquipe_(token);
+  prepararAbas_([SHEETS.COMPROMISSO_SEMANAL, SHEETS.CRONOGRAMA]);
   const inicioSemana = isoDoDate_(inicioSemana_(new Date()));
   const jaComprometidos = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS)
     .filter(c => c.DataInicioSemana === inicioSemana).map(c => c.IDPacote);
@@ -134,6 +123,7 @@ function apiCompromissoSemanal(token) {
   exigirEquipe_(token);
   const hit = cacheLer_(CACHE_COMPROMISSO_SEMANAL);
   if (hit) return hit;
+  prepararAbas_([SHEETS.COMPROMISSO_SEMANAL, SHEETS.OBRAS, SHEETS.CRONOGRAMA]);
 
   const compromissos = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);

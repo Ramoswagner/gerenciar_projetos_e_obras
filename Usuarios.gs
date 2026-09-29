@@ -144,6 +144,7 @@ function semearPrimeiroPmo() {
     msg = 'PMO inicial criado.';
   }
 
+  dadosAlterados_();
   const resultado = msg + '\ne-mail: ' + email + '\nsenha temporária: ' + senhaTemp +
     '\n(troque depois de logar, pela tela de Usuários quando ela existir)';
   Logger.log(resultado);
