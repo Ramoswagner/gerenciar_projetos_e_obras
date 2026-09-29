@@ -126,6 +126,14 @@ async function main() {
     await pagina.goto('http://obras.local/', { waitUntil: 'networkidle' }).catch(() => {});
     const foto = async (nome) => {
       await pagina.waitForTimeout(250);
+      // critério de aceite: nenhuma tela com rolagem lateral da página inteira
+      const larg = await pagina.evaluate(() => ({ doc: document.documentElement.scrollWidth, tela: window.innerWidth,
+        culpados: Array.from(document.querySelectorAll('#shellConteudo *')).filter(e => e.getBoundingClientRect().right > window.innerWidth + 1 && !e.closest('.tab-scroll,.kanban-board,[style*="overflow-x:auto"],.seg-abas,.gantt-wrap'))
+          .slice(0, 3).map(e => e.tagName.toLowerCase() + '.' + String(e.className).split(' ')[0]) }));
+      if (larg.doc > larg.tela + 1) {
+        console.log('[' + nomeTam + '] ROLAGEM LATERAL em ' + nome + ': página com ' + larg.doc + 'px numa tela de ' + larg.tela + 'px ' + JSON.stringify(larg.culpados));
+        process.exitCode = 1;
+      }
       await pagina.screenshot({ path: path.join(SAIDA, nomeTam + '-' + nome + '.png'), fullPage: nome !== 'usuario-modal' });
     };
     for (const passo of roteiro) {
@@ -182,6 +190,20 @@ async function main() {
         const u = cfg.usuarios.find(x => x.Email === 'teste.visual@hospitaldabaleia.org.br');
         g('apiSalvarUsuario')(tPmo, { ID: u.ID, Nome: u.Nome, Email: 'removido.' + nomeTam + '@x.org', Papel: 'Consulta', Status: 'inativo' });
         await pagina.evaluate(() => { CFG = null; });
+      } else if (passo.indexOf('js:') === 0) {
+        // passo livre: "js:<código>=<nome da captura>" (ex.: abrir o detalhe de uma obra)
+        const [codigo, nome] = passo.slice(3).split('=');
+        await pagina.evaluate(codigo);
+        await pagina.waitForTimeout(700);
+        await foto(nome);
+      } else if (passo === 'menu') {
+        if (viewport.width <= 900) {
+          await pagina.click('.mb-botao');
+          await pagina.waitForTimeout(300);
+          await foto('menu-aberto');
+          await pagina.click('.sb-fundo', { position: { x: viewport.width - 20, y: 400 } });
+          await pagina.waitForTimeout(250);
+        }
       } else if (passo === 'usuario-modal') {
         await pagina.evaluate(() => { CFG_ABA = 'usuarios'; renderConfiguracoes(); abrirUsuario_(CFG.usuarios[1].ID); });
         await foto(passo);

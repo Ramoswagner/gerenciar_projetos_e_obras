@@ -1,56 +1,33 @@
 <script>
 // ═══════════════════════════ CASCA (shell admin) ═══════════════════════════
-// Sidebar organizada por fases do ciclo de vida da obra (Gestão /
-// Iniciação / Planejamento / Execução e Monitoramento / Encerramento).
+// Visual do sistema de eventos: barra lateral com a marca no topo e o menu
+// na ordem do trabalho (Pedidos → … → Encerramento). No celular vira
+// gaveta, aberta pelo botão da barra compacta.
 //
-// ROTAS é um registro preenchido pelos módulos de tela (Pedidos.html,
-// Obras.html etc., incluídos nas próximas fases): cada módulo registra
-// ROTAS['pedidos'] = suaFuncaoDeCarregar. Item de menu sem rota
-// registrada cai automaticamente na tela "Em breve" — é assim que a
-// casca fica completa desde já sem depender das telas existirem.
+// ROTAS é um registro preenchido pelos módulos de tela: cada módulo
+// registra ROTAS['pedidos'] = suaFuncaoDeCarregar. Só aparece no menu o
+// que já tem tela (ROTAS) e o que o perfil logado pode abrir (`perm`).
 const ROTAS = {};
 
-// Cada item declara a permissão que exige (`perm`, "módulo.ação" — ver
-// MODULOS em Permissoes.gs; 'PMO' = exclusivo do PMO). O menu mostra só o
-// que o perfil logado pode abrir; a proteção de verdade é do servidor.
+// `perm` = permissão exigida ("módulo.ação", ver MODULOS em Permissoes.gs;
+// 'PMO' = exclusivo do PMO). A proteção de verdade é sempre do servidor.
 const SIDEBAR_SECOES = [
-  {titulo:'Gestão', itens:[
-    {id:'painel', ico:'space_dashboard', label:'Painel de Controle', sub:'kanban · execução', perm:'painel.ler',
-     desc:'Kanban unificado do ciclo de vida (Pedido → Manifestação → Cronograma → Validado → Em Obra → Finalizado, com Cancelado como saída paralela) e dashboard resumido de execução.'}
+  {titulo:'Visão geral', itens:[
+    {id:'painel', ico:'space_dashboard', label:'Painel', sub:'tudo em um olhar', perm:'painel.ler'},
+    {id:'minhasatividades', ico:'construction', label:'Minhas atividades', sub:'meus pacotes de trabalho', perm:'minhas.editar', soResponsavel:true}
   ]},
-  {titulo:'Iniciação', itens:[
-    {id:'pedidos', ico:'forum', label:'Pedidos', perm:'pedidos.ler',
-     desc:'Solicitações de obra recebidas das áreas do hospital — análise, conversa com o solicitante e conversão em obra.'},
-    {id:'obras', ico:'domain', label:'Obras', sub:'manifestações', perm:'projetos.ler',
-     desc:'Cadastro TAP 5W2H, EAP, publicação e manifestações das áreas.'},
-    {id:'areas', ico:'domain_verification', label:'Áreas propostas', perm:'areas.ler',
-     desc:'Nomes de área novos sugeridos nas manifestações, aguardando decisão do PMO.'}
-  ]},
-  {titulo:'Planejamento', itens:[
-    {id:'cronogramapmo', ico:'timeline', label:'Cronograma', sub:'visão do PMO', perm:'cronograma.ler',
-     desc:'Fila de validação, cronogramas validados e Gantt — reuniões e Pull Planning ficam dentro de cada obra.'}
-  ]},
-  {titulo:'Execução e Monitoramento', itens:[
-    {id:'execucao', ico:'engineering', label:'Execução', perm:'execucao.ler',
-     desc:'Acompanhamento operacional completo das obras em andamento.'},
-    {id:'lookahead', ico:'calendar_view_week', label:'Lookahead Planning', sub:'remoção de impedimentos', perm:'execucao.ler',
-     desc:'Janela móvel de 6 semanas revisando as restrições capturadas no Pull Planning até estarem liberadas.'},
-    {id:'compromisso', ico:'fact_check', label:'Compromisso Semanal', sub:'atividades · PPC', perm:'execucao.ler',
-     desc:'Escolha semanal do que será executado, com PPC e causa categorizada de não-cumprimento.'},
-    {id:'pagamentos', ico:'payments', label:'Pagamentos', sub:'medição · curva S', perm:'medicoes.ler',
-     desc:'Plano de pagamento por atividade, medições com evidência, aprovação final do PMO e cronograma físico-financeiro.'}
-  ]},
-  {titulo:'Encerramento', itens:[
-    {id:'encerramento', ico:'verified', label:'Encerramento', sub:'finalizado · cancelado', perm:'encerramento.ler',
-     desc:'Inspeção técnica, checklist de qualidade, documentos as-built e assinaturas de aceite final.'}
-  ]},
-  {titulo:'Minhas Atividades', itens:[
-    {id:'minhasatividades', ico:'construction', label:'Minhas Atividades', perm:'minhas.editar',
-     desc:'Pacotes de trabalho sob sua responsabilidade — marque o andamento conforme executa.'}
+  {titulo:'Ciclo do projeto', itens:[
+    {id:'pedidos', ico:'forum', label:'Pedidos', sub:'entrada e aprovação', perm:'pedidos.ler'},
+    {id:'obras', ico:'domain', label:'Projetos', sub:'obras e projetos', perm:'projetos.ler'},
+    {id:'areas', ico:'share_location', label:'Áreas e impactos', sub:'áreas propostas', perm:'areas.ler'},
+    {id:'cronogramapmo', ico:'timeline', label:'Cronograma', sub:'visão rápida', perm:'cronograma.ler'},
+    {id:'lookahead', ico:'calendar_view_week', label:'Lookahead', sub:'antecipar impedimentos', perm:'execucao.ler'},
+    {id:'compromisso', ico:'fact_check', label:'Compromisso semanal', sub:'atividades · PPC', perm:'execucao.ler'},
+    {id:'pagamentos', ico:'payments', label:'Medições', sub:'pagamentos · curva S', perm:'medicoes.ler'},
+    {id:'encerramento', ico:'verified', label:'Encerramento', sub:'aceite e relatórios', perm:'encerramento.ler'}
   ]},
   {titulo:'Administração', itens:[
-    {id:'configuracoes', ico:'admin_panel_settings', label:'Configurações', sub:'usuários · permissões', perm:'PMO',
-     desc:'Usuários, perfis e permissões, e quem aprova cada portão — exclusivo do PMO.'}
+    {id:'configuracoes', ico:'admin_panel_settings', label:'Configurações', sub:'usuários · permissões', perm:'PMO'}
   ]}
 ];
 
@@ -58,6 +35,7 @@ let NAV_ATIVO = 'painel';
 
 function navTo(id){
   NAV_ATIVO = id;
+  fecharMenu_();
   const rota = ROTAS[id];
   if (rota) { rota(); } else { renderEmBreve(id); }
 }
@@ -70,16 +48,22 @@ function itemNav_(id){
   return null;
 }
 
-function papelBadge(){
-  const cor = PAPEL==='PMO' ? ['var(--info-bg)','var(--info)','verified']
-    : PAPEL==='Engenharia' ? ['var(--ok-bg)','var(--teal-dark)','engineering']
-    : ['var(--gold-bg)','#B45309','person_check'];
-  return `<span class="pill" style="background:${cor[0]};color:${cor[1]}"><span class="ico" style="font-size:14px">${cor[2]}</span>${esc(PAPEL)}</span>`;
+// Aparece no menu: tem tela pronta e o perfil pode abrir. "Minhas
+// atividades" fica só para quem não tem o Painel (o responsável de campo).
+function itemVisivel_(i){
+  if (!ROTAS[i.id]) return false;
+  if (i.soResponsavel && pode('painel.ler')) return false;
+  return i.perm === 'PMO' ? PAPEL === 'PMO' : pode(i.perm);
 }
 
-// Casca PERSISTENTE: topbar+sidebar são montadas UMA vez; navegar só troca
-// o conteúdo interno (#shellConteudo) e a classe .active do menu — sem
-// reconstruir a sidebar, sem recarregar o logo, sem tremor de tela.
+function papelBadge(){
+  const cor = PAPEL==='PMO' ? ['var(--info-bg)','#1E40AF','verified'] : ['rgba(255,255,255,.12)','#fff','badge'];
+  return `<span class="pill" style="background:${cor[0]};color:${cor[1]}"><span class="ico" style="font-size:14px">${cor[2]}</span>${esc(PAPEL==='Responsavel'?'Responsável':PAPEL)}</span>`;
+}
+
+// Casca PERSISTENTE: barra lateral montada UMA vez; navegar só troca o
+// conteúdo (#shellConteudo) e a marcação do item ativo — sem reconstruir o
+// menu, sem recarregar a logo, sem tremor de tela.
 function montarShell_(){
   const el=document.getElementById('app');
   if(el.classList.contains('shell-mode') && $('shellConteudo')) return; // já montada
@@ -87,16 +71,24 @@ function montarShell_(){
     const itens = sec.itens.filter(itemVisivel_);
     if(!itens.length) return '';
     const links = itens.map(i=>{
-      const label='<span class="nav-label">'+esc(i.label)+(i.sub?'<span class="nav-sub">· '+esc(i.sub)+'</span>':'')+'</span>';
-      const soon=ROTAS[i.id]?'':'<span class="nav-soon">Em breve</span>';
-      return `<a id="nav-${i.id}" href="#" title="${esc(i.label)}" onclick="navTo('${i.id}');return false"><span class="ico">${i.ico}</span>${label}${soon}</a>`;
+      const label='<span class="nav-label">'+esc(i.label)+(i.sub?'<span class="nav-sub">'+esc(i.sub)+'</span>':'')+'</span>';
+      return `<a id="nav-${i.id}" href="#" title="${esc(i.label)}" onclick="navTo('${i.id}');return false"><span class="ico">${i.ico}</span>${label}<span class="nav-cont" id="cont-${i.id}" hidden></span></a>`;
     }).join('');
     return `<div class="sb-section"><div class="sb-section-titulo">${esc(sec.titulo)}</div><nav>${links}</nav></div>`;
   }).join('');
 
-  el.innerHTML=`<header class="app-topbar"><div class="brand"><span class="brand-logo"><img src="${LOGO_HB}" alt="Hospital da Baleia"></span>Gestão Estratégica de Projetos | PMO</div></header>
-  <aside class="app-sidebar">
-    <button class="sb-toggle" id="sbToggle" title="Recolher/expandir menu" onclick="alternarSidebar_()"><span class="ico">chevron_left</span></button>
+  el.innerHTML=`<header class="app-mobilebar">
+    <button class="mb-botao" onclick="abrirMenu_()" aria-label="Abrir menu" aria-controls="menuLateral"><span class="ico">menu</span></button>
+    <div class="mb-titulo"><span>Projetos e Obras · PMO</span><b id="mbTitulo">Painel</b></div>
+    <span class="mb-av" title="${esc(NOME)}">${esc(iniciaisNome_(NOME))}</span>
+  </header>
+  <div class="sb-fundo" onclick="fecharMenu_()"></div>
+  <aside class="app-sidebar" id="menuLateral" aria-label="Menu principal">
+    <div class="sb-marca">
+      <button class="sb-toggle" id="sbToggle" title="Recolher/expandir menu" aria-label="Recolher ou expandir o menu" onclick="alternarSidebar_()"><span class="ico">chevron_left</span></button>
+      <span class="sb-marca-logo"><img src="${LOGO_HB}" alt="Hospital da Baleia"></span>
+      <span class="sb-marca-txt"><b>Projetos e Obras</b><span>PMO · Hospital da Baleia</span></span>
+    </div>
     <div class="sb-nav-scroll">${secoes}</div>
     <div class="sb-footer">
       <div class="sb-user"><span class="ico" style="font-size:18px">account_circle</span><span class="sb-user-nome">${esc(NOME)}<span class="sb-user-cargo">${esc(CARGO||'')}</span></span>${papelBadge()}</div>
@@ -115,7 +107,33 @@ function montarShell_(){
   }
 }
 
-// Recolher/expandir a sidebar (só ícones vs. ícones+texto) — preferência
+function iniciaisNome_(nome){
+  const p = String(nome||'').trim().split(/\s+/);
+  return ((p[0]||' ')[0]+(p.length>1?p[p.length-1][0]:'')).toUpperCase();
+}
+
+// Gaveta do celular
+function abrirMenu_(){
+  const el = document.getElementById('app');
+  el.classList.add('menu-aberto');
+  const ativo = document.querySelector('.app-sidebar nav a.active') || document.querySelector('.app-sidebar nav a');
+  if(ativo) setTimeout(()=>ativo.focus(), 50);
+}
+function fecharMenu_(){
+  const el = document.getElementById('app');
+  if(el) el.classList.remove('menu-aberto');
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharMenu_(); });
+
+// Número ao lado de um item do menu (ex.: pedidos aguardando aprovação).
+function contadorMenu_(id, n){
+  const c = $('cont-'+id);
+  if(!c) return;
+  c.textContent = n > 99 ? '99+' : String(n||'');
+  c.hidden = !n;
+}
+
+// Recolher/expandir a barra (só ícones vs. ícones+texto) — preferência
 // persistida em localStorage, sobrevive a navegação e a novas sessões.
 function alternarSidebar_(){
   const el=document.getElementById('app');
@@ -138,6 +156,7 @@ function renderShell(activeNav, innerHtml, wide){
   montarShell_();
   document.querySelectorAll('.app-sidebar nav a').forEach(a=>a.classList.remove('active'));
   const ativo=$('nav-'+activeNav); if(ativo)ativo.classList.add('active');
+  const it = itemNav_(activeNav); const mb = $('mbTitulo'); if(mb) mb.textContent = it ? it.label : 'Projetos e Obras';
   $('shellMain').classList.toggle('shell-wide',!!wide);
   const c=$('shellConteudo');
   c.innerHTML=innerHtml;
@@ -167,10 +186,6 @@ function renderEmBreve(id){
     <h2 style="justify-content:center;margin-top:10px">Em breve</h2>
     <p style="color:var(--muted);max-width:460px;margin:6px auto 0">${esc(it.desc||'Esta tela será ativada numa fase seguinte da construção do novo sistema.')}</p></div>`;
   renderShell(id, h);
-}
-
-function itemVisivel_(i){
-  return i.perm === 'PMO' ? PAPEL === 'PMO' : pode(i.perm);
 }
 
 // Home após o login: o Painel, ou a primeira tela que o perfil pode abrir
