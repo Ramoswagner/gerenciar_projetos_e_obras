@@ -30,7 +30,7 @@ function invalidarCacheCompromissoSemanal_() {
 // Só um compromisso por Pacote por semana — não faz sentido comprometer o
 // mesmo pacote 2x na mesma semana.
 function apiComprometerPacote(token, idObra, idPacote, responsavelNome) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'execucao', 'editar');
   idObra = sanitize_(idObra, 30);
   idPacote = sanitize_(idPacote, 30);
   if (!idObra || !idPacote) throw new Error('Pacote inválido.');
@@ -60,7 +60,7 @@ function apiComprometerPacote(token, idObra, idPacote, responsavelNome) {
 }
 
 function apiMarcarCompromisso(token, idCompromisso, status, categoriaNaoCumprimento, detalhes) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'execucao', 'editar');
   if (['Cumprido', 'Não cumprido'].indexOf(status) < 0) throw new Error('Status inválido — use "Cumprido" ou "Não cumprido".');
   if (status === 'Não cumprido' && CATEGORIAS_NAO_CUMPRIMENTO.indexOf(categoriaNaoCumprimento) < 0) {
     throw new Error('Selecione uma categoria de não-cumprimento válida.');
@@ -84,7 +84,7 @@ function apiMarcarCompromisso(token, idCompromisso, status, categoriaNaoCumprime
 // engano antes da semana ser decidida) — uma vez marcado Cumprido/Não
 // cumprido, vira histórico do PPC e não pode mais sumir.
 function apiExcluirCompromisso(token, idCompromisso) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'execucao', 'excluir');
   return comLock_(() => {
     const compromisso = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS).find(c => c.ID === idCompromisso);
     if (!compromisso) throw new Error('Compromisso não encontrado.');
@@ -109,7 +109,7 @@ function calcularPPC_(compromissosDaSemana) {
 // Pacotes do cronograma da obra que AINDA NÃO têm compromisso na semana
 // atual — alimenta a lista de "comprometer" na tela.
 function apiPacotesParaComprometer(token, idObra) {
-  exigirEquipe_(token);
+  exigir_(token, 'execucao', 'ler');
   prepararAbas_([SHEETS.COMPROMISSO_SEMANAL, SHEETS.CRONOGRAMA]);
   const inicioSemana = isoDoDate_(inicioSemana_(new Date()));
   const jaComprometidos = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS)
@@ -120,7 +120,7 @@ function apiPacotesParaComprometer(token, idObra) {
 }
 
 function apiCompromissoSemanal(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'execucao', 'ler');
   const hit = cacheLer_(CACHE_COMPROMISSO_SEMANAL);
   if (hit) return hit;
   prepararAbas_([SHEETS.COMPROMISSO_SEMANAL, SHEETS.OBRAS, SHEETS.CRONOGRAMA]);

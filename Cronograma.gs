@@ -20,7 +20,7 @@
 // solicitada" — essa regra de integridade não depende do botão usado,
 // nunca pode ficar um "Validado" desatualizado silenciosamente.
 function apiSalvarCronograma(token, idObra, etapas, pacotes, enviarParaValidacao) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'cronograma', 'editar');
   const resultado = comLock_(() => {
     const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
     if (!obra) throw new Error('Obra não encontrada.');

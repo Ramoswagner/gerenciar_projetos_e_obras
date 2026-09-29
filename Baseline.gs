@@ -32,7 +32,7 @@ function congelarBaseline_(idObra) {
 }
 
 function apiGetBaseline(token, idObra) {
-  exigirEquipe_(token);
+  exigir_(token, 'cronograma', 'ler');
   return readAll_(SHEETS.BASELINE, BASELINE_HEADERS).filter(b => b.IDObra === idObra)
     .sort((a, b) => String(a.DataInicioPrevista || '9999').localeCompare(String(b.DataInicioPrevista || '9999')));
 }

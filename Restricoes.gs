@@ -19,7 +19,7 @@ function invalidarCacheLookahead_() {
 }
 
 function apiSalvarRestricao(token, dados) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'execucao', 'editar');
   dados = dados || {};
   const idObra = sanitize_(dados.IDObra, 30);
   const idPacote = sanitize_(dados.IDPacote, 30);
@@ -66,7 +66,7 @@ function apiSalvarRestricao(token, dados) {
 // volta pra outro status limpa esses campos, pra nunca ficar um registro
 // "liberado por X" que na verdade foi reaberto depois.
 function apiMoverRestricao(token, idRestricao, novoStatus) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'execucao', 'editar');
   if (RESTRICAO_STATUS_OPCOES.indexOf(novoStatus) < 0) throw new Error('Status inválido.');
   return comLock_(() => {
     const restricao = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS).find(r => r.ID === idRestricao);
@@ -83,7 +83,7 @@ function apiMoverRestricao(token, idRestricao, novoStatus) {
 }
 
 function apiExcluirRestricao(token, idRestricao) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'execucao', 'excluir');
   return comLock_(() => {
     const restricao = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS).find(r => r.ID === idRestricao);
     if (!restricao) throw new Error('Restrição não encontrada.');
@@ -115,7 +115,7 @@ function pastaEvidencias_(idObra) {
 }
 
 function apiUploadEvidenciaRestricao(token, idRestricao, nomeArquivo, mimeType, base64Data) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'execucao', 'editar');
   const restricao = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS).find(r => r.ID === idRestricao);
   if (!restricao) throw new Error('Restrição não encontrada.');
   nomeArquivo = sanitize_(nomeArquivo, 180) || 'evidencia';
@@ -148,12 +148,12 @@ function apiUploadEvidenciaRestricao(token, idRestricao, nomeArquivo, mimeType, 
 // edição do Lookahead, que não carrega o cronograma inteiro da obra (like
 // apiGetObraAdmin faz pra Cronograma.gs) só pra abrir 1 impedimento.
 function apiListarEvidenciasRestricao(token, idRestricao) {
-  exigirEquipe_(token);
+  exigir_(token, 'execucao', 'ler');
   return readAll_(SHEETS.RESTRICOES_EVIDENCIAS, RESTRICOES_EVIDENCIAS_HEADERS).filter(e => e.IDRestricao === idRestricao);
 }
 
 function apiExcluirEvidenciaRestricao(token, idEvidencia) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'execucao', 'excluir');
   return comLock_(() => {
     const evidencia = readAll_(SHEETS.RESTRICOES_EVIDENCIAS, RESTRICOES_EVIDENCIAS_HEADERS).find(e => e.ID === idEvidencia);
     if (!evidencia) throw new Error('Evidência não encontrada.');
@@ -203,7 +203,7 @@ function isoDoDate_(d) {
 }
 
 function apiLookahead(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'execucao', 'ler');
   const hit = cacheLer_(CACHE_LOOKAHEAD);
   if (hit) return hit;
   prepararAbas_([SHEETS.RESTRICOES, SHEETS.OBRAS, SHEETS.CRONOGRAMA, SHEETS.RESTRICOES_EVIDENCIAS]);

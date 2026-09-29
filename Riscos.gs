@@ -6,7 +6,7 @@
  * daqui em salvarEtapasPacotes_ (ver Cronograma.gs), nunca editado direto.
  */
 function apiSalvarRisco(token, dados) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'cronograma', 'editar');
   dados = dados || {};
   const idObra = sanitize_(dados.IDObra, 30);
   const idPacote = sanitize_(dados.IDPacote, 30);
@@ -44,7 +44,7 @@ function apiSalvarRisco(token, dados) {
 }
 
 function apiExcluirRisco(token, idRisco) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'cronograma', 'excluir');
   return comLock_(() => {
     const risco = readAll_(SHEETS.RISCOS, RISCOS_HEADERS).find(r => r.ID === idRisco);
     if (!risco) throw new Error('Risco não encontrado.');

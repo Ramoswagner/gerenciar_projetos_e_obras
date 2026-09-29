@@ -41,12 +41,13 @@ const SHEETS = {
   ENCERRAMENTO_ASSINATURAS: 'EncerramentoAssinaturas',
   RISCOS: 'Riscos',
   RESTRICOES_EVIDENCIAS: 'RestricoesEvidencias',
-  MEDICOES_EVIDENCIAS: 'MedicoesEvidencias'
+  MEDICOES_EVIDENCIAS: 'MedicoesEvidencias',
+  PERMISSOES: 'Permissoes',
+  APROVADORES: 'Aprovadores'
 };
 
-// ────────────────────────────────────────────── PAPÉIS E STATUS ──
-
-const PAPEIS = ['PMO', 'Engenharia', 'Responsavel'];
+// ────────────────────────────────────────────── STATUS ──
+// Perfis de acesso (PMO fixo + os configuráveis) vivem em Permissoes.gs.
 
 // 'Cancelada' é alcançável de qualquer status anterior a 'Finalizado'
 // (estado paralelo, não sequencial). 'Finalizado' só é atingido via
@@ -322,6 +323,8 @@ function cabecalhosDaAba_(nome) {
   mapa[SHEETS.RISCOS] = RISCOS_HEADERS;
   mapa[SHEETS.RESTRICOES_EVIDENCIAS] = RESTRICOES_EVIDENCIAS_HEADERS;
   mapa[SHEETS.MEDICOES_EVIDENCIAS] = MEDICOES_EVIDENCIAS_HEADERS;
+  mapa[SHEETS.PERMISSOES] = PERMISSOES_HEADERS;
+  mapa[SHEETS.APROVADORES] = APROVADORES_HEADERS;
   const h = mapa[nome];
   if (!h) throw new Error('Aba sem cabeçalho registrado: ' + nome);
   return h;
@@ -362,6 +365,9 @@ function setup() {
   ensureSheet_(ss, SHEETS.RISCOS, RISCOS_HEADERS);
   ensureSheet_(ss, SHEETS.RESTRICOES_EVIDENCIAS, RESTRICOES_EVIDENCIAS_HEADERS);
   ensureSheet_(ss, SHEETS.MEDICOES_EVIDENCIAS, MEDICOES_EVIDENCIAS_HEADERS);
+  ensureSheet_(ss, SHEETS.PERMISSOES, PERMISSOES_HEADERS);
+  ensureSheet_(ss, SHEETS.APROVADORES, APROVADORES_HEADERS);
+  semearPermissoesSeVazia_('setup');
 
   // Migração idempotente: completa colunas novas no fim das abas que já
   // existiam numa planilha copiada da produção, preservando todo o

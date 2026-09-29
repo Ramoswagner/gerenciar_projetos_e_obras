@@ -41,6 +41,20 @@ Idas à planilha por tela, medidas com `node tests/bench.js` (2 obras de exemplo
 3. Implante a cópia como web app e teste com os usuários-chave.
 4. Só depois publique na produção.
 
+## Usuários, perfis e permissões
+
+Tudo em **Configurações** (só o PMO vê este menu):
+
+- **Usuários**: criar, editar, trocar o perfil, ativar/desativar e definir senha (botão *Gerar* cria uma senha forte).
+  Mudar perfil, situação ou senha encerra as sessões abertas daquela pessoa na hora.
+- **Perfis e permissões**: o que cada perfil pode fazer em cada módulo (ver, cadastrar e editar, excluir, cancelar, gerar).
+  Perfis iniciais: Engenharia, Responsável (só as próprias atividades) e Consulta (só leitura). Dá para criar outros
+  (ex.: Financeiro, Diretoria). As mudanças valem na próxima ação de cada usuário, sem novo login.
+- **Aprovadores**: quem, além do PMO, aprova cada portão (G0 a G4) em Obra e em Projeto — por perfil ou por pessoa.
+
+O PMO tem acesso total e aprova qualquer portão; o sistema nunca fica sem um PMO ativo.
+Qualquer usuário troca a própria senha em **Minha senha**, no rodapé do menu.
+
 ## Funções de manutenção (rodar pelo editor)
 
 Escolha a função na barra do editor e clique em **Executar**. Todas são bloqueadas para quem acessa pelo site.
@@ -62,6 +76,12 @@ Precisa do Node.js 18 ou mais novo. Na pasta do projeto:
 
 ```bash
 npm test
+```
+
+Para ver as telas sem publicar (capturas em computador e celular, com cliques reais conferidos no servidor simulado):
+
+```bash
+NODE_PATH=$(npm root -g) node tests/preview.js tests/capturas
 ```
 
 Os testes rodam o servidor inteiro num simulador do Apps Script (`tests/gas-mock.js`), sem tocar em

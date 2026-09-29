@@ -129,6 +129,85 @@ teste('página pública da obra só expõe os campos públicos', () => {
   assert.strictEqual(pub.obra.Titulo, 'Obra pública');
 });
 
+// ─────────────────────────────── permissões configuráveis ───────────────────────────────
+
+teste('perfil Consulta vê tudo mas não altera nada', () => {
+  const s = sistemaComPmo();
+  const id = s.g('apiSalvarObra')(s.token, { Titulo: 'Obra' }, []).id;
+  const t = criarUsuario(s, 'Consulta', 'consulta@hospital.org');
+  assert.strictEqual(s.g('apiListarObras')(t).length, 1);
+  assert.strictEqual(s.g('apiGetObraAdmin')(t, id).obra.ID, id);
+  s.g('apiKanban')(t);
+  assert.throws(() => s.g('apiSalvarObra')(t, { ID: id, Titulo: 'x' }, []), /restrita/);
+  assert.throws(() => s.g('apiMudarStatus')(t, id, 'Publicada'), /restrita/);
+  assert.throws(() => s.g('apiSalvarCronograma')(t, id, [], [], false), /restrita/);
+});
+
+teste('perfil criado pelo PMO vale na hora e muda na hora', () => {
+  const s = sistemaComPmo();
+  s.g('apiSalvarPerfil')(s.token, { Perfil: 'Financeiro', Novo: true, Descricao: 'Pagamentos', Permissoes: ['medicoes.ler', 'medicoes.editar', 'invalida.x'] });
+  const t = criarUsuario(s, 'Financeiro', 'fin@hospital.org');
+  assert.deepStrictEqual(Array.from(s.g('login')('fin@hospital.org', 'senha-Financeiro').permissoes), ['medicoes.ler', 'medicoes.editar']);
+  s.g('apiPagamentosResumo')(t);
+  assert.throws(() => s.g('apiListarObras')(t), /restrita/);
+  novaExecucao(s);
+  s.g('apiSalvarPerfil')(s.token, { Perfil: 'Financeiro', Permissoes: ['medicoes.ler', 'projetos.ler'] });
+  novaExecucao(s);
+  s.g('apiListarObras')(t); // passou a poder, sem novo login
+  assert.throws(() => s.g('apiSalvarParcela')(t, {}), /restrita/);
+  assert.throws(() => s.g('apiSalvarPerfil')(s.token, { Perfil: 'pmo', Novo: true, Permissoes: [] }), /PMO é fixo/);
+  assert.throws(() => s.g('apiSalvarPerfil')(s.token, { Perfil: 'Financeiro', Novo: true, Permissoes: [] }), /Já existe/);
+});
+
+teste('perfil em uso não pode ser excluído; perfil vazio pode', () => {
+  const s = sistemaComPmo();
+  criarUsuario(s, 'Consulta', 'c@hospital.org');
+  assert.throws(() => s.g('apiExcluirPerfil')(s.token, 'Consulta'), /usuário/);
+  s.g('apiExcluirPerfil')(s.token, 'Responsavel');
+  assert.ok(s.g('perfisValidos_')().indexOf('Responsavel') < 0);
+  assert.throws(() => criarUsuario(s, 'Responsavel', 'r@hospital.org'), /perfil/);
+});
+
+teste('aprovadores: PMO sempre; demais por perfil ou por usuário, tipo e portão', () => {
+  const s = sistemaComPmo();
+  const tEng = criarUsuario(s, 'Engenharia', 'eng@hospital.org');
+  const tCons = criarUsuario(s, 'Consulta', 'cons@hospital.org');
+  const cons = s.g('apiConfigAcessos')(s.token).usuarios.find(u => u.Email === 'cons@hospital.org');
+  s.g('apiSalvarAprovadores')(s.token, [
+    { Tipo: 'Obra', Portao: 'G0', Perfil: 'Engenharia' },
+    { Tipo: 'Todos', Portao: 'G1', UsuarioId: cons.ID },
+    { Tipo: 'Obra', Portao: 'G0', Perfil: 'Engenharia' }, // repetido: ignorado
+    { Tipo: 'Obra', Portao: 'G9', Perfil: 'Engenharia' }  // portão inválido: ignorado
+  ]);
+  novaExecucao(s);
+  const sess = (t) => s.g('validarToken_')(t);
+  const pode = s.g('podeAprovar_');
+  assert.strictEqual(s.g('apiConfigAcessos')(s.token).aprovadores.length, 2);
+  assert.ok(pode(sess(s.token), 'Projeto', 'G4'));
+  assert.ok(pode(sess(tEng), 'Obra', 'G0'));
+  assert.ok(!pode(sess(tEng), 'Projeto', 'G0'));
+  assert.ok(pode(sess(tCons), 'Projeto', 'G1'));
+  assert.ok(!pode(sess(tCons), 'Obra', 'G0'));
+});
+
+teste('trocar a própria senha exige a atual e derruba as sessões antigas', () => {
+  const s = sistemaComPmo();
+  const t = criarUsuario(s, 'Engenharia', 'eng@hospital.org');
+  assert.throws(() => s.g('apiTrocarMinhaSenha')(t, 'errada', 'nova-senha-1'), /não confere/);
+  assert.throws(() => s.g('apiTrocarMinhaSenha')(t, 'senha-Engenharia', '123'), /pelo menos/);
+  s.g('apiTrocarMinhaSenha')(t, 'senha-Engenharia', 'nova-senha-1');
+  assert.throws(() => s.g('apiListarObras')(t), /Sessão inválida/);
+  assert.ok(s.g('login')('eng@hospital.org', 'nova-senha-1').token);
+  assert.deepStrictEqual(Array.from(s.g('apiMinhaSessao')(s.g('login')('eng@hospital.org', 'nova-senha-1').token).permissoes).slice(0, 1), ['painel.ler']);
+});
+
+teste('só o PMO acessa as configurações de acesso', () => {
+  const s = sistemaComPmo();
+  const t = criarUsuario(s, 'Engenharia', 'eng@hospital.org');
+  ['apiConfigAcessos', 'apiSalvarPerfil', 'apiExcluirPerfil', 'apiSalvarAprovadores', 'apiListarUsuarios', 'apiSalvarUsuario']
+    .forEach(fn => assert.throws(() => s.g(fn)(t, {}), /restrita/i, fn));
+});
+
 // ─────────────────────────────── integridade ───────────────────────────────
 
 teste('salvar o cronograma de uma obra não altera nenhuma linha de outra obra', () => {

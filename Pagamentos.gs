@@ -25,7 +25,7 @@ function invalidarCachePagamentosResumo_() {
 }
 
 function apiSalvarParcela(token, dados) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'medicoes', 'editar');
   dados = dados || {};
   const idObra = sanitize_(dados.IDObra, 30);
   const idPacote = sanitize_(dados.IDPacote, 30);
@@ -62,7 +62,7 @@ function apiSalvarParcela(token, dados) {
 }
 
 function apiExcluirParcela(token, idParcela) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'medicoes', 'excluir');
   const temMedicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).some(m => m.IDParcela === idParcela);
   if (temMedicao) throw new Error('Esta parcela já tem medição registrada — não pode ser excluída (preserva o histórico financeiro).');
   return comLock_(() => {
@@ -77,7 +77,7 @@ function apiExcluirParcela(token, idParcela) {
 // ────────────────────────────────────────────── MEDIÇÕES ──
 
 function apiRegistrarMedicao(token, dados) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'medicoes', 'editar');
   dados = dados || {};
   const idObra = sanitize_(dados.IDObra, 30);
   const idPacote = sanitize_(dados.IDPacote, 30);
@@ -127,7 +127,7 @@ function apiAprovarMedicao(token, idMedicao, aprovado, observacoes) {
 }
 
 function apiExcluirMedicao(token, idMedicao) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'medicoes', 'excluir');
   return comLock_(() => {
     const medicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).find(m => m.ID === idMedicao);
     if (!medicao) throw new Error('Medição não encontrada.');
@@ -144,7 +144,7 @@ function apiExcluirMedicao(token, idMedicao) {
 // Restricoes.gs) ou link colado (URL validada no servidor).
 
 function apiUploadEvidenciaMedicao(token, idMedicao, nomeArquivo, mimeType, base64Data) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'medicoes', 'editar');
   const medicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).find(m => m.ID === idMedicao);
   if (!medicao) throw new Error('Medição não encontrada.');
   nomeArquivo = sanitize_(nomeArquivo, 180) || 'evidencia';
@@ -180,7 +180,7 @@ function linkValidoServidor_(s) {
 }
 
 function apiAnexarLinkEvidenciaMedicao(token, idMedicao, descricao, link) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'medicoes', 'editar');
   const medicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).find(m => m.ID === idMedicao);
   if (!medicao) throw new Error('Medição não encontrada.');
   const linkOk = sanitize_(link, 500);
@@ -202,7 +202,7 @@ function apiAnexarLinkEvidenciaMedicao(token, idMedicao, descricao, link) {
 }
 
 function apiExcluirEvidenciaMedicao(token, idEvidencia) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'medicoes', 'excluir');
   return comLock_(() => {
     const evidencia = readAll_(SHEETS.MEDICOES_EVIDENCIAS, MEDICOES_EVIDENCIAS_HEADERS).find(e => e.ID === idEvidencia);
     if (!evidencia) throw new Error('Evidência não encontrada.');
@@ -291,7 +291,7 @@ function curvaSFisicoFinanceira_(baseline, medicoesAprovadas) {
 }
 
 function apiCurvaS(token, idObra) {
-  exigirEquipe_(token);
+  exigir_(token, 'medicoes', 'ler');
   prepararAbas_([SHEETS.BASELINE, SHEETS.MEDICOES]);
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS).filter(b => b.IDObra === idObra);
   const medicoesAprovadas = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS)
@@ -312,7 +312,7 @@ function apiCurvaS(token, idObra) {
 // Portfólio — só obras que já têm Baseline (as únicas que podem ter plano
 // de pagamento). Alimenta a lista/filtro da tela Pagamentos.
 function apiPagamentosResumo(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'medicoes', 'ler');
   const hit = cacheLer_(CACHE_PAGAMENTOS_RESUMO);
   if (hit) return hit;
   prepararAbas_([SHEETS.BASELINE, SHEETS.OBRAS, SHEETS.MEDICOES]);
@@ -353,7 +353,7 @@ function apiPagamentosResumo(token) {
 // parcelas e medições (com evidências) aninhadas, pronto pro cliente
 // agrupar sem chamadas extras.
 function apiPagamentosObra(token, idObra) {
-  exigirEquipe_(token);
+  exigir_(token, 'medicoes', 'ler');
   prepararAbas_([SHEETS.BASELINE, SHEETS.PLANO_PAGAMENTO, SHEETS.MEDICOES, SHEETS.MEDICOES_EVIDENCIAS, SHEETS.OBRAS]);
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS).filter(b => b.IDObra === idObra)
     .sort((a, b) => String(a.DataInicioPrevista || '9999').localeCompare(String(b.DataInicioPrevista || '9999')));

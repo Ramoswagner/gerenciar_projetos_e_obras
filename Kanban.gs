@@ -39,7 +39,7 @@ function kanbanBucketObra_(obra) {
 const CACHE_KANBAN = 'admin_kanban_v1';
 
 function apiKanban(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'painel', 'ler');
   const hit = cacheLer_(CACHE_KANBAN);
   if (hit) return hit;
   prepararAbas_([SHEETS.PEDIDOS, SHEETS.CRONOGRAMA, SHEETS.OBRAS]);

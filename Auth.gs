@@ -64,7 +64,10 @@ function login(email, senha) {
   };
   cache.put(SESSAO_CACHE_PREFIXO + token, JSON.stringify(payload), SESSAO_TTL_SEG);
 
-  return { ok: true, token: token, nome: usuario.Nome, papel: usuario.Papel, cargo: usuario.Cargo };
+  return {
+    ok: true, token: token, nome: usuario.Nome, papel: usuario.Papel, cargo: usuario.Cargo,
+    permissoes: permissoesDoPerfil_(usuario.Papel)
+  };
 }
 
 function logout(token) {

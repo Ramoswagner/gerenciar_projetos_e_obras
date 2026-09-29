@@ -9,7 +9,7 @@
  */
 
 function apiMeusPacotes(token) {
-  const sessao = exigirPapel_(token, ['Responsavel']);
+  const sessao = exigir_(token, 'minhas', 'editar');
   prepararAbas_([SHEETS.OBRAS, SHEETS.CRONOGRAMA]);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
   const obraPorId = {}; obras.forEach(o => obraPorId[o.ID] = o);
@@ -29,7 +29,7 @@ function apiMeusPacotes(token) {
 // atual (ResponsavelUserId === sessao.usuarioId), nunca confia em vir do
 // cliente qual pacote pode ser alterado por quem.
 function apiCheckoffPacote(token, idPacote, novoStatus) {
-  const sessao = exigirPapel_(token, ['Responsavel']);
+  const sessao = exigir_(token, 'minhas', 'editar');
   if (CRONOGRAMA_STATUS.indexOf(novoStatus) < 0) throw new Error('Status inválido.');
   return comLock_(() => {
     const pacote = readAll_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS).find(p => p.ID === idPacote);

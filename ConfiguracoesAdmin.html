@@ -1,0 +1,514 @@
+<style>
+/* ═══ NOVO — Configurações (usuários, perfis, aprovadores) ═══ */
+.seg-abas{display:flex;gap:4px;background:var(--bg2);padding:4px;border-radius:10px;margin-bottom:18px;overflow-x:auto;scrollbar-width:none}
+.seg-abas::-webkit-scrollbar{display:none}
+.seg-abas button{flex:1;min-width:max-content;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 14px;border-radius:8px;background:transparent;color:var(--muted);font-weight:600;font-size:13px;min-height:44px}
+.seg-abas button .ico{font-size:18px}
+.seg-abas button.ativa{background:#fff;color:var(--navy);box-shadow:var(--shadow-1)}
+.seg-abas .qtd{background:var(--bg2);color:var(--muted);border-radius:10px;padding:1px 8px;font-size:11px}
+.seg-abas button.ativa .qtd{background:var(--teal-lt);color:var(--teal-dark)}
+
+.cfg-busca{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #CBD5E1;border-radius:8px;padding:0 12px;min-height:44px;max-width:360px}
+.cfg-busca input{border:none!important;box-shadow:none!important;padding:10px 0!important}
+.cfg-quem{display:flex;align-items:center;gap:12px;min-width:0}
+.cfg-avatar{width:36px;height:36px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0}
+.cfg-quem b{display:block;color:var(--navy);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cfg-quem small{display:block;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cfg-inativo{opacity:.55}
+
+/* Tabela que vira cartões no celular: cada <td> leva data-rot com o nome da coluna. */
+@media (max-width:640px){
+  .tbl-resp thead{display:none}
+  .tbl-resp tbody tr{display:block;padding:12px 16px;border-bottom:1px solid var(--border)}
+  .tbl-resp tbody tr:nth-child(even){background:#fff}
+  .tbl-resp td{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0!important;border:none!important}
+  .tbl-resp td[data-rot]::before{content:attr(data-rot);font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .tbl-resp td.td-principal{display:block}
+  .tbl-resp td.td-abrir{display:none}
+  .seg-abas .rot-longo,.seg-abas .qtd{display:none}
+  .seg-abas button{padding:10px 6px}
+  .barra-salvar{flex-wrap:wrap}
+  .barra-salvar .aviso{width:100%;justify-content:flex-end}
+}
+
+.perfil-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);margin-bottom:14px;overflow:hidden}
+.perfil-card .pc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--border);background:var(--bg)}
+.perfil-card .pc-head h3{font-size:16px;margin:0;display:flex;align-items:center;gap:8px}
+.perfil-card .pc-head p{color:var(--muted);font-size:12.5px;margin-top:2px}
+.perfil-card .pc-acoes{display:flex;gap:8px;flex-wrap:wrap}
+.pc-toggle{display:flex;align-items:flex-start;gap:10px;background:transparent;text-align:left;padding:0;color:inherit;flex:1;min-width:220px}
+.pc-toggle h3{pointer-events:none}
+.pc-seta{margin-top:1px;color:var(--muted);transition:transform .15s}
+.perfil-card.aberto .pc-seta{transform:rotate(180deg)}
+.pc-resumo{display:flex;flex-wrap:wrap;gap:6px;padding:14px 20px}
+.pc-mod{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:12px;background:var(--teal-lt);color:var(--teal-dark);font-size:12px;font-weight:600}
+.pc-mod em{font-style:normal;font-weight:500;color:var(--muted);font-size:11px}
+.perm-linha{display:grid;grid-template-columns:minmax(200px,1fr) 2fr;gap:10px 18px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--bg2)}
+.perm-linha:last-child{border-bottom:none}
+.perm-linha .pl-nome{font-size:13.5px;color:var(--navy);font-weight:600}
+.perm-chips{display:flex;flex-wrap:wrap;gap:6px}
+.perm-chip{position:relative;display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 12px;border-radius:18px;border:1px solid #CBD5E1;background:#fff;color:var(--muted);font-size:12.5px;font-weight:600;cursor:pointer;user-select:none;transition:background .12s,border-color .12s,color .12s}
+.perm-chip input{position:absolute;opacity:0;pointer-events:none}
+.perm-chip .ico{font-size:16px}
+.perm-chip.on{background:var(--teal-lt);border-color:var(--teal-dark);color:var(--teal-dark)}
+.perm-chip:focus-within{outline:3px solid rgba(45,212,191,.5);outline-offset:2px}
+.perfil-total{padding:16px 20px;color:var(--txt);font-size:13.5px;display:flex;gap:10px;align-items:center}
+@media (max-width:640px){
+  .perm-linha{grid-template-columns:1fr;padding:12px 16px}
+  .perfil-card .pc-head{padding:14px 16px}
+}
+
+.apr-grade{display:grid;grid-template-columns:minmax(180px,1fr) 1fr 1fr;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:#fff}
+.apr-grade > div{padding:12px 16px;border-bottom:1px solid var(--bg2)}
+.apr-grade .apr-th{background:var(--bg);font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.apr-grade .apr-portao{font-weight:600;color:var(--navy);font-size:13.5px;display:flex;align-items:center}
+.apr-celula{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.apr-chip{display:inline-flex;align-items:center;gap:4px;padding:5px 6px 5px 10px;border-radius:14px;background:var(--info-bg);color:#1E40AF;font-size:12px;font-weight:600}
+.apr-chip.usuario{background:var(--gold-bg);color:#92400E}
+.apr-chip button{background:transparent;color:inherit;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;padding:0}
+.apr-chip button .ico{font-size:15px}
+.apr-pmo{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:14px;background:var(--bg2);color:var(--muted);font-size:12px;font-weight:600}
+.apr-add{width:auto!important;min-height:32px;padding:4px 8px!important;font-size:12px!important;border-style:dashed!important;color:var(--muted)}
+@media (max-width:760px){
+  .apr-grade{grid-template-columns:1fr}
+  .apr-grade .apr-th{display:none}
+  .apr-grade .apr-portao{background:var(--bg);border-top:1px solid var(--border)}
+  .apr-grade .apr-celula::before{content:attr(data-rot);width:100%;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+}
+.barra-salvar{position:sticky;bottom:0;display:flex;justify-content:flex-end;align-items:center;gap:10px;padding:12px 0;margin-top:12px;background:linear-gradient(180deg,rgba(248,250,252,0),var(--bg) 40%)}
+.barra-salvar .aviso{color:#B45309;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:4px}
+.sb-acoes{display:flex;gap:6px}
+.sb-acoes .btn{flex:1;justify-content:center;padding:6px 10px!important;font-size:12px!important;min-height:36px}
+#app.sidebar-colapsada .sb-acoes{flex-direction:column}
+.senha-gerada{display:flex;align-items:center;gap:8px;margin-top:8px;padding:10px 12px;background:var(--gold-bg);border-radius:8px;font-family:'IBM Plex Mono',monospace;font-size:14px;color:#92400E}
+</style>
+
+<script>
+// ═══════════════════════════ CONFIGURAÇÕES (só PMO) ═══════════════════════════
+// Três abas: Usuários (criar, editar, ativar/desativar, definir senha),
+// Perfis e permissões (o que cada perfil pode fazer, por módulo) e
+// Aprovadores (quem, além do PMO, aprova cada portão por tipo de projeto).
+// O servidor valida tudo de novo (Permissoes.gs / Usuarios.gs).
+
+ROTAS['configuracoes'] = carregarConfiguracoes;
+
+let CFG = null;               // resposta de apiConfigAcessos
+let CFG_ABA = 'usuarios';
+let CFG_BUSCA = '';
+let CFG_PERFIS_EDIT = {};     // perfil -> Set de permissões em edição (não salvas)
+let CFG_APR_EDIT = null;      // lista de aprovadores em edição (não salva)
+let CFG_PERFIL_ABERTO = {};   // perfis expandidos na tela
+
+async function carregarConfiguracoes(){
+  const tinhaCache = !!CFG;
+  if(tinhaCache){ renderConfiguracoes(); } else { skeleton('lista'); }
+  try{
+    CFG = await gs('apiConfigAcessos', TOKEN);
+    CFG_PERFIS_EDIT = {};
+    CFG_APR_EDIT = null;
+    if(NAV_ATIVO==='configuracoes') renderConfiguracoes();
+  }catch(e){
+    if(!tratarErroSessao(e) && !tinhaCache) toast(e.message);
+  }
+}
+
+function renderConfiguracoes(){
+  if(!CFG) return;
+  const nUsu = CFG.usuarios.filter(u=>u.Status==='ativo').length;
+  const acao = CFG_ABA==='usuarios'
+    ? `<button class="btn btn-primary" onclick="abrirUsuario_()"><span class="ico" style="font-size:17px">person_add</span>Novo usuário</button>`
+    : CFG_ABA==='perfis'
+      ? `<button class="btn btn-primary" onclick="abrirNovoPerfil_()"><span class="ico" style="font-size:17px">add</span>Novo perfil</button>`
+      : '';
+  let h = `<div class="pg-header">
+    <div>
+      <div class="ph-ctx"><span class="ph-chip">ADMINISTRAÇÃO</span><span style="font-size:11px;color:var(--muted)">Hospital da Baleia · Engenharia e PMO</span></div>
+      <h2>Configurações</h2>
+      <p class="ph-desc">Quem entra no sistema, o que cada perfil pode fazer e quem aprova cada portão. O PMO tem acesso total e aprova qualquer portão.</p>
+    </div>
+    ${acao}
+  </div>
+  <div class="seg-abas" role="tablist">
+    ${abaCfg_('usuarios','group','Usuários','',nUsu)}
+    ${abaCfg_('perfis','badge','Perfis',' e permissões',CFG.perfis.length+1)}
+    ${abaCfg_('aprovadores','approval','Aprovadores','',null)}
+  </div>`;
+  if(CFG_ABA==='usuarios') h += htmlUsuarios_();
+  else if(CFG_ABA==='perfis') h += htmlPerfis_();
+  else h += htmlAprovadores_();
+  renderShell('configuracoes', h);
+}
+
+// `complemento` some no celular para as três abas caberem sem rolagem.
+function abaCfg_(id, ico, rotulo, complemento, qtd){
+  return `<button role="tab" aria-selected="${CFG_ABA===id}" class="${CFG_ABA===id?'ativa':''}" onclick="trocarAbaCfg_('${id}')">
+    <span class="ico">${ico}</span>${rotulo}${complemento?'<span class="rot-longo">'+complemento+'</span>':''}${qtd!==null?'<span class="qtd">'+qtd+'</span>':''}</button>`;
+}
+
+function trocarAbaCfg_(id){
+  if(temAlteracaoCfg_() && !confirm('Há alterações não salvas nesta aba. Sair mesmo assim?')) return;
+  CFG_PERFIS_EDIT = {}; CFG_APR_EDIT = null;
+  CFG_ABA = id; renderConfiguracoes();
+}
+
+function temAlteracaoCfg_(){
+  return Object.keys(CFG_PERFIS_EDIT).length>0 || CFG_APR_EDIT!==null;
+}
+
+function rotuloPerfil_(p){ return p==='Responsavel' ? 'Responsável' : p; }
+
+// ─────────────────────────────── USUÁRIOS ───────────────────────────────
+
+function htmlUsuarios_(){
+  const q = CFG_BUSCA.toLowerCase();
+  const lista = CFG.usuarios
+    .filter(u => !q || (u.Nome+' '+u.Email+' '+u.Cargo+' '+u.Papel).toLowerCase().indexOf(q)>=0)
+    .sort((a,b)=> (a.Status===b.Status ? a.Nome.localeCompare(b.Nome) : (a.Status==='ativo'?-1:1)));
+  const linhas = lista.map(u=>`<tr class="${u.Status==='ativo'?'':'cfg-inativo'}" onclick="abrirUsuario_('${esc(u.ID)}')">
+      <td class="td-principal"><div class="cfg-quem"><span class="cfg-avatar">${esc(iniciais_(u.Nome))}</span><div style="min-width:0"><b>${esc(u.Nome)}</b><small>${esc(u.Email)}</small></div></div></td>
+      <td data-rot="Cargo">${esc(u.Cargo||'—')}</td>
+      <td data-rot="Perfil">${chipPerfil_(u.Papel)}</td>
+      <td data-rot="Situação">${u.Status==='ativo'
+        ? '<span class="chip-status" style="background:var(--ok-bg);color:#065F46"><span class="ico ico-fill">check_circle</span>Ativo</span>'
+        : '<span class="chip-status" style="background:#F3F4F6;color:#374151"><span class="ico ico-fill">block</span>Inativo</span>'}</td>
+      <td class="td-abrir" style="text-align:right;width:1%"><span class="ico" style="color:var(--muted)">chevron_right</span></td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:26px">Nenhum usuário encontrado.</td></tr>`;
+  return `<div class="tab-card depth-card">
+    <div class="tc-head">
+      <label class="cfg-busca" style="margin:0"><span class="ico" style="color:var(--muted)">search</span>
+        <input type="text" placeholder="Buscar usuário" value="${esc(CFG_BUSCA)}" oninput="CFG_BUSCA=this.value;atualizarTabelaUsuarios_()" aria-label="Buscar usuários"></label>
+      <span style="font-size:12px;color:var(--muted)">${CFG.usuarios.length} usuário(s)</span>
+    </div>
+    <div class="tab-scroll"><table class="tabela-densa tbl-resp">
+      <thead><tr><th>Usuário</th><th>Cargo</th><th>Perfil</th><th>Situação</th><th></th></tr></thead>
+      <tbody id="cfgUsuariosBody">${linhas}</tbody>
+    </table></div>
+  </div>`;
+}
+
+// Filtra sem redesenhar a tela inteira (o campo de busca não perde o foco).
+function atualizarTabelaUsuarios_(){
+  const tmp = document.createElement('div');
+  tmp.innerHTML = htmlUsuarios_();
+  const novo = tmp.querySelector('#cfgUsuariosBody');
+  const atual = $('cfgUsuariosBody');
+  if(novo && atual) atual.innerHTML = novo.innerHTML;
+}
+
+function chipPerfil_(p){
+  const pmo = p==='PMO';
+  return `<span class="chip-status" style="background:${pmo?'var(--info-bg)':'var(--bg2)'};color:${pmo?'#1E40AF':'var(--navy)'}"><span class="ico ico-fill">${pmo?'verified':'badge'}</span>${esc(rotuloPerfil_(p))}</span>`;
+}
+
+function opcoesPerfis_(selecionado){
+  const perfis = ['PMO'].concat(CFG.perfis.map(p=>p.perfil));
+  return perfis.map(p=>`<option value="${esc(p)}" ${p===selecionado?'selected':''}>${esc(rotuloPerfil_(p))}${p==='PMO'?' — acesso total':''}</option>`).join('');
+}
+
+function abrirUsuario_(id){
+  const u = id ? CFG.usuarios.find(x=>x.ID===id) : null;
+  const novo = !u;
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalUsuario" onclick="if(event.target===this)fecharModalCfg_('modalUsuario')">
+    <div class="modal-card" style="max-width:520px" role="dialog" aria-modal="true" aria-labelledby="muTitulo">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h2 id="muTitulo" style="margin:0"><span class="ico">${novo?'person_add':'manage_accounts'}</span>${novo?'Novo usuário':'Editar usuário'}</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" aria-label="Fechar" onclick="fecharModalCfg_('modalUsuario')"><span class="ico">close</span></button>
+      </div>
+      <label for="mu_nome">Nome *</label><input type="text" id="mu_nome" maxlength="120" value="${esc(u?u.Nome:'')}" autocomplete="off">
+      <label for="mu_email">E-mail institucional *</label><input type="email" id="mu_email" maxlength="150" value="${esc(u?u.Email:'')}" autocomplete="off">
+      <div class="form-grid-2">
+        <div><label for="mu_cargo">Cargo</label><input type="text" id="mu_cargo" maxlength="120" value="${esc(u?u.Cargo:'')}"></div>
+        <div><label for="mu_perfil">Perfil *</label><select id="mu_perfil">${opcoesPerfis_(u?u.Papel:'Engenharia')}</select></div>
+      </div>
+      <label for="mu_senha">${novo?'Senha inicial *':'Nova senha'}</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="mu_senha" maxlength="200" autocomplete="new-password" placeholder="${novo?'mínimo 6 caracteres':'em branco: não muda'}">
+        <button class="btn btn-ghost" type="button" style="white-space:nowrap" onclick="gerarSenhaCfg_()"><span class="ico" style="font-size:17px">casino</span>Gerar</button>
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin-top:6px">Mudar o perfil, a situação ou a senha encerra as sessões abertas dessa pessoa.</p>
+      ${u ? `<label style="display:flex;align-items:center;gap:10px;margin-top:14px;font-weight:600;cursor:pointer">
+        <input type="checkbox" id="mu_ativo" ${u.Status==='ativo'?'checked':''} style="width:20px;height:20px">Acesso ativo</label>` : ''}
+      <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="fecharModalCfg_('modalUsuario')">Cancelar</button>
+        <button class="btn btn-teal" id="mu_salvar" onclick="salvarUsuarioCfg_('${u?esc(u.ID):''}')"><span class="ico">check</span>Salvar</button>
+      </div>
+    </div>
+  </div>`);
+  setTimeout(()=>{ const el=$('mu_nome'); if(el) el.focus(); }, 30);
+}
+
+function gerarSenhaCfg_(){
+  const letras = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint32Array(10);
+  crypto.getRandomValues(bytes);
+  $('mu_senha').value = Array.from(bytes, b=>letras[b % letras.length]).join('');
+  $('mu_senha').select();
+}
+
+async function salvarUsuarioCfg_(id){
+  const dados = {
+    ID: id || '', Nome: $('mu_nome').value.trim(), Email: $('mu_email').value.trim(),
+    Cargo: $('mu_cargo').value.trim(), Papel: $('mu_perfil').value, Senha: $('mu_senha').value,
+    Status: id ? ($('mu_ativo').checked ? 'ativo' : 'inativo') : 'ativo'
+  };
+  const faltando = [];
+  if(!dados.Nome) faltando.push('mu_nome');
+  if(!dados.Email) faltando.push('mu_email');
+  if(!id && !dados.Senha) faltando.push('mu_senha');
+  if(faltando.length){ marcarErro(faltando); return; }
+  const btn = $('mu_salvar'); btn.disabled = true;
+  try{
+    await gs('apiSalvarUsuario', TOKEN, dados);
+    const senhaDefinida = dados.Senha;
+    fecharModalCfg_('modalUsuario');
+    toast(senhaDefinida ? 'Usuário salvo. Envie a senha à pessoa por um canal seguro.' : 'Usuário salvo.');
+    await carregarConfiguracoes();
+  }catch(e){
+    btn.disabled = false;
+    if(!tratarErroSessao(e)) toast(e.message);
+  }
+}
+
+// ─────────────────────────────── PERFIS E PERMISSÕES ───────────────────────────────
+
+function permissoesEmEdicao_(perfil){
+  if(CFG_PERFIS_EDIT[perfil]) return CFG_PERFIS_EDIT[perfil];
+  const p = CFG.perfis.find(x=>x.perfil===perfil);
+  return new Set(p ? p.permissoes : []);
+}
+
+function htmlPerfis_(){
+  const icoAcao = {ler:'visibility', editar:'edit', excluir:'delete', cancelar:'block', gerar:'picture_as_pdf'};
+  let h = `<div class="perfil-card">
+    <div class="pc-head"><div><h3><span class="ico" style="color:var(--info)">verified</span>PMO</h3>
+      <p>Perfil fixo do Núcleo de Projetos.</p></div></div>
+    <div class="perfil-total"><span class="ico" style="color:var(--ok)">all_inclusive</span>Acesso total a todos os módulos, às Configurações e à aprovação de qualquer portão.</div>
+  </div>`;
+  CFG.perfis.forEach(p=>{
+    const sel = permissoesEmEdicao_(p.perfil);
+    const alterado = !!CFG_PERFIS_EDIT[p.perfil];
+    const aberto = alterado || !!CFG_PERFIL_ABERTO[p.perfil];
+    const modulosLiberados = CFG.modulos.filter(m=>m.acoes.some(a=>sel.has(m.id+'.'+a)));
+    const resumo = modulosLiberados.length
+      ? modulosLiberados.map(m=>'<span class="pc-mod">'+esc(m.rotulo.split(' (')[0])+(m.acoes.every(a=>sel.has(m.id+'.'+a))?'':'<em>parcial</em>')+'</span>').join('')
+      : '<span style="color:var(--muted);font-size:12.5px">Nenhum módulo liberado.</span>';
+    const linhas = CFG.modulos.map(m=>`<div class="perm-linha">
+        <div class="pl-nome">${esc(m.rotulo)}</div>
+        <div class="perm-chips">${m.acoes.map(a=>{
+          const chave = m.id+'.'+a, on = sel.has(chave);
+          return `<label class="perm-chip ${on?'on':''}"><input type="checkbox" ${on?'checked':''} onchange="marcarPermissao_('${esc(p.perfil)}','${m.id}','${a}',this.checked)">
+            <span class="ico">${on?'check_circle':icoAcao[a]||'radio_button_unchecked'}</span>${esc(CFG.acoesRotulo[a]||a)}</label>`;
+        }).join('')}</div>
+      </div>`).join('');
+    h += `<div class="perfil-card${aberto?' aberto':''}" id="perfil-${esc(p.perfil)}">
+      <div class="pc-head">
+        <button class="pc-toggle" aria-expanded="${aberto}" onclick="alternarPerfil_('${esc(p.perfil)}')">
+          <span class="ico pc-seta">expand_more</span>
+          <span><h3><span class="ico" style="color:var(--teal-dark)">badge</span>${esc(rotuloPerfil_(p.perfil))}</h3>
+          <p>${esc(p.descricao||'Sem descrição')} · ${p.usuarios} usuário(s) ativo(s)</p></span>
+        </button>
+        <div class="pc-acoes">
+          ${alterado?`<button class="btn btn-ghost" onclick="descartarPerfil_('${esc(p.perfil)}')">Descartar</button>
+            <button class="btn btn-teal" onclick="salvarPerfilCfg_('${esc(p.perfil)}')"><span class="ico">check</span>Salvar permissões</button>`:''}
+          ${!alterado && !p.usuarios?`<button class="btn btn-danger" onclick="excluirPerfilCfg_('${esc(p.perfil)}')"><span class="ico">delete</span>Excluir</button>`:''}
+        </div>
+      </div>
+      ${aberto ? linhas : '<div class="pc-resumo">'+resumo+'</div>'}
+    </div>`;
+  });
+  return h;
+}
+
+// Ver é pré-requisito de qualquer outra ação no módulo: ligar "editar"
+// liga "ver"; desligar "ver" desliga o resto.
+function marcarPermissao_(perfil, modulo, acao, ligado){
+  const sel = new Set(permissoesEmEdicao_(perfil));
+  const mod = CFG.modulos.find(m=>m.id===modulo);
+  if(ligado){
+    sel.add(modulo+'.'+acao);
+    if(acao!=='ler' && mod.acoes.indexOf('ler')>=0) sel.add(modulo+'.ler');
+  } else {
+    sel.delete(modulo+'.'+acao);
+    if(acao==='ler') mod.acoes.forEach(a=>sel.delete(modulo+'.'+a));
+  }
+  CFG_PERFIS_EDIT[perfil] = sel;
+  const y = window.scrollY;
+  renderConfiguracoes();
+  window.scrollTo(0, y);
+}
+
+function alternarPerfil_(perfil){
+  CFG_PERFIL_ABERTO[perfil] = !CFG_PERFIL_ABERTO[perfil];
+  const y = window.scrollY; renderConfiguracoes(); window.scrollTo(0, y);
+}
+
+function descartarPerfil_(perfil){
+  delete CFG_PERFIS_EDIT[perfil];
+  const y = window.scrollY; renderConfiguracoes(); window.scrollTo(0, y);
+}
+
+async function salvarPerfilCfg_(perfil){
+  const p = CFG.perfis.find(x=>x.perfil===perfil);
+  try{
+    await gs('apiSalvarPerfil', TOKEN, { Perfil: perfil, Descricao: p.descricao, Permissoes: Array.from(CFG_PERFIS_EDIT[perfil]) });
+    toast('Permissões de ' + rotuloPerfil_(perfil) + ' salvas. Valem na próxima ação de cada usuário.');
+    await carregarConfiguracoes();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirPerfilCfg_(perfil){
+  if(!confirm('Excluir o perfil ' + rotuloPerfil_(perfil) + '? Os aprovadores ligados a ele também saem.')) return;
+  try{
+    await gs('apiExcluirPerfil', TOKEN, perfil);
+    toast('Perfil excluído.');
+    await carregarConfiguracoes();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function abrirNovoPerfil_(){
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalPerfil" onclick="if(event.target===this)fecharModalCfg_('modalPerfil')">
+    <div class="modal-card" style="max-width:460px" role="dialog" aria-modal="true" aria-labelledby="mpTitulo">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h2 id="mpTitulo" style="margin:0"><span class="ico">badge</span>Novo perfil</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" aria-label="Fechar" onclick="fecharModalCfg_('modalPerfil')"><span class="ico">close</span></button>
+      </div>
+      <label for="mp_nome">Nome *</label><input type="text" id="mp_nome" maxlength="40" placeholder="ex.: Financeiro, Diretoria, TI">
+      <label for="mp_desc">Para quem é</label><input type="text" id="mp_desc" maxlength="300" placeholder="uma frase sobre quem usa este perfil">
+      <label for="mp_base">Começar com as permissões de</label>
+      <select id="mp_base"><option value="">Nenhuma (marco depois)</option>${CFG.perfis.map(p=>'<option value="'+esc(p.perfil)+'">'+esc(rotuloPerfil_(p.perfil))+'</option>').join('')}</select>
+      <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="fecharModalCfg_('modalPerfil')">Cancelar</button>
+        <button class="btn btn-teal" id="mp_salvar" onclick="criarPerfilCfg_()"><span class="ico">check</span>Criar perfil</button>
+      </div>
+    </div>
+  </div>`);
+  setTimeout(()=>{ const el=$('mp_nome'); if(el) el.focus(); }, 30);
+}
+
+async function criarPerfilCfg_(){
+  const nome = $('mp_nome').value.trim();
+  if(!nome){ marcarErro(['mp_nome']); return; }
+  const base = CFG.perfis.find(p=>p.perfil===$('mp_base').value);
+  const btn = $('mp_salvar'); btn.disabled = true;
+  try{
+    await gs('apiSalvarPerfil', TOKEN, { Perfil: nome, Novo: true, Descricao: $('mp_desc').value.trim(), Permissoes: base ? base.permissoes : [] });
+    fecharModalCfg_('modalPerfil');
+    CFG_PERFIL_ABERTO[nome] = true;
+    toast('Perfil criado. Marque o que ele pode fazer.');
+    await carregarConfiguracoes();
+    const card = document.getElementById('perfil-'+nome);
+    if(card) card.scrollIntoView({behavior:'smooth', block:'start'});
+  }catch(e){ btn.disabled = false; if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ─────────────────────────────── APROVADORES ───────────────────────────────
+
+// A tela trabalha com Obra e Projeto separados; um registro "Todos" vira um
+// em cada coluna ao abrir e é salvo assim.
+function aprovadoresEmEdicao_(){
+  if(CFG_APR_EDIT) return CFG_APR_EDIT;
+  const out = [];
+  CFG.aprovadores.forEach(a=>{
+    (a.Tipo==='Todos' ? CFG.tipos : [a.Tipo]).forEach(t=>out.push({Tipo:t, Portao:a.Portao, Perfil:a.Perfil||'', UsuarioId:a.UsuarioId||''}));
+  });
+  return out;
+}
+
+function htmlAprovadores_(){
+  const lista = aprovadoresEmEdicao_();
+  const usuarios = CFG.usuarios.filter(u=>u.Status==='ativo' && u.Papel!=='PMO');
+  const nomeUsu = id => { const u = CFG.usuarios.find(x=>x.ID===id); return u ? u.Nome : id; };
+  let h = `<p style="color:var(--txt);font-size:13.5px;margin:-4px 0 14px">O PMO aprova todos os portões. Adicione quem mais pode aprovar cada um — por perfil (todos daquele perfil) ou por pessoa.</p>
+  <div class="apr-grade">
+    <div class="apr-th">Portão</div>${CFG.tipos.map(t=>'<div class="apr-th">'+esc(t)+'</div>').join('')}`;
+  CFG.portoes.forEach(p=>{
+    h += `<div class="apr-portao">${esc(p.rotulo)}</div>`;
+    CFG.tipos.forEach(t=>{
+      const daqui = lista.map((a,i)=>({a,i})).filter(x=>x.a.Tipo===t && x.a.Portao===p.id);
+      const chips = daqui.map(x=> x.a.Perfil
+        ? `<span class="apr-chip"><span class="ico" style="font-size:14px">badge</span>${esc(rotuloPerfil_(x.a.Perfil))}<button aria-label="Remover" onclick="removerAprovador_(${x.i})"><span class="ico">close</span></button></span>`
+        : `<span class="apr-chip usuario"><span class="ico" style="font-size:14px">person</span>${esc(nomeUsu(x.a.UsuarioId))}<button aria-label="Remover" onclick="removerAprovador_(${x.i})"><span class="ico">close</span></button></span>`).join('');
+      h += `<div class="apr-celula" data-rot="${esc(t)}"><span class="apr-pmo"><span class="ico" style="font-size:14px">verified</span>PMO</span>${chips}
+        <select class="apr-add" aria-label="Adicionar aprovador" onchange="adicionarAprovador_('${esc(t)}','${p.id}',this.value)">
+          <option value="">+ adicionar</option>
+          <optgroup label="Perfil">${CFG.perfis.map(x=>'<option value="P:'+esc(x.perfil)+'">'+esc(rotuloPerfil_(x.perfil))+'</option>').join('')}</optgroup>
+          ${usuarios.length?'<optgroup label="Pessoa">'+usuarios.map(u=>'<option value="U:'+esc(u.ID)+'">'+esc(u.Nome)+'</option>').join('')+'</optgroup>':''}
+        </select></div>`;
+    });
+  });
+  h += `</div>`;
+  if(CFG_APR_EDIT){
+    h += `<div class="barra-salvar"><span class="aviso"><span class="ico" style="font-size:17px">edit_note</span>Alterações não salvas</span>
+      <button class="btn btn-ghost" onclick="CFG_APR_EDIT=null;renderConfiguracoes()">Descartar</button>
+      <button class="btn btn-teal" onclick="salvarAprovadoresCfg_()"><span class="ico">check</span>Salvar aprovadores</button></div>`;
+  }
+  return h;
+}
+
+function adicionarAprovador_(tipo, portao, valor){
+  if(!valor) return;
+  const lista = aprovadoresEmEdicao_().slice();
+  const item = {Tipo:tipo, Portao:portao, Perfil: valor.indexOf('P:')===0 ? valor.slice(2) : '', UsuarioId: valor.indexOf('U:')===0 ? valor.slice(2) : ''};
+  if(!lista.some(a=>a.Tipo===item.Tipo && a.Portao===item.Portao && a.Perfil===item.Perfil && a.UsuarioId===item.UsuarioId)) lista.push(item);
+  CFG_APR_EDIT = lista;
+  const y = window.scrollY; renderConfiguracoes(); window.scrollTo(0, y);
+}
+
+function removerAprovador_(i){
+  const lista = aprovadoresEmEdicao_().slice();
+  lista.splice(i, 1);
+  CFG_APR_EDIT = lista;
+  const y = window.scrollY; renderConfiguracoes(); window.scrollTo(0, y);
+}
+
+async function salvarAprovadoresCfg_(){
+  try{
+    const r = await gs('apiSalvarAprovadores', TOKEN, CFG_APR_EDIT);
+    toast('Aprovadores salvos (' + r.total + ').');
+    await carregarConfiguracoes();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ─────────────────────────────── MINHA SENHA (qualquer usuário) ───────────────────────────────
+
+function abrirTrocarSenha(){
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalSenha" onclick="if(event.target===this)fecharModalCfg_('modalSenha')">
+    <div class="modal-card" style="max-width:420px" role="dialog" aria-modal="true" aria-labelledby="msTitulo">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h2 id="msTitulo" style="margin:0"><span class="ico">key</span>Trocar minha senha</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" aria-label="Fechar" onclick="fecharModalCfg_('modalSenha')"><span class="ico">close</span></button>
+      </div>
+      <label for="ms_atual">Senha atual</label><input type="password" id="ms_atual" autocomplete="current-password">
+      <label for="ms_nova">Nova senha</label><input type="password" id="ms_nova" autocomplete="new-password" placeholder="mínimo 6 caracteres">
+      <label for="ms_conf">Repita a nova senha</label><input type="password" id="ms_conf" autocomplete="new-password" onkeydown="if(event.key==='Enter')trocarSenha_()">
+      <p style="color:var(--muted);font-size:12px;margin-top:8px">Depois de trocar, entre de novo com a nova senha (em todos os aparelhos).</p>
+      <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="fecharModalCfg_('modalSenha')">Cancelar</button>
+        <button class="btn btn-teal" id="ms_salvar" onclick="trocarSenha_()"><span class="ico">check</span>Trocar senha</button>
+      </div>
+    </div>
+  </div>`);
+  setTimeout(()=>{ const el=$('ms_atual'); if(el) el.focus(); }, 30);
+}
+
+async function trocarSenha_(){
+  const atual = $('ms_atual').value, nova = $('ms_nova').value, conf = $('ms_conf').value;
+  if(!atual || !nova){ marcarErro([atual?'ms_nova':'ms_atual']); return; }
+  if(nova !== conf){ marcarErro(['ms_conf']); toast('As duas senhas novas não são iguais.'); return; }
+  const btn = $('ms_salvar'); btn.disabled = true;
+  try{
+    await gs('apiTrocarMinhaSenha', TOKEN, atual, nova);
+    fecharModalCfg_('modalSenha');
+    limparSessao_(); renderLogin();
+    toast('Senha alterada. Entre com a nova senha.');
+  }catch(e){ btn.disabled = false; if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function fecharModalCfg_(id){ const m = $(id); if(m) m.remove(); }
+
+// Esc fecha os modais desta tela.
+document.addEventListener('keydown', e=>{
+  if(e.key !== 'Escape') return;
+  ['modalSenha','modalPerfil','modalUsuario'].some(id=>{ if($(id)){ fecharModalCfg_(id); return true; } return false; });
+});
+</script>

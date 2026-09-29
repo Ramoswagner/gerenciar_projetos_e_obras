@@ -166,7 +166,7 @@ function invalidarCachePedidos_() {
 }
 
 function apiListarPedidos(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'pedidos', 'ler');
   const hit = cacheLer_(CACHE_LISTA_PEDIDOS);
   if (hit) return hit;
   const lista = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS)
@@ -181,7 +181,7 @@ function apiListarPedidos(token) {
 }
 
 function apiGetPedidoAdmin(token, id) {
-  exigirEquipe_(token);
+  exigir_(token, 'pedidos', 'ler');
   const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
   if (!pedido) throw new Error('Pedido não encontrado: ' + id);
   return {
@@ -192,12 +192,12 @@ function apiGetPedidoAdmin(token, id) {
 }
 
 function apiLinkNovoPedido(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'pedidos', 'ler');
   return { link: linkNovoPedido_() };
 }
 
 function apiAtualizarStatusPedido(token, id, novoStatus, observacoes) {
-  exigirEquipe_(token);
+  exigir_(token, 'pedidos', 'editar');
   // 'Cancelado' fica fora deste endpoint de propósito — cancelamento tem
   // fluxo próprio com justificativa obrigatória (Fase 5), mesmo princípio
   // que já isola 'Manifestação encerrada' em Obras.
@@ -226,7 +226,7 @@ function apiAtualizarStatusPedido(token, id, novoStatus, observacoes) {
 // pedido aceito. Não cria a obra sozinho — devolve os dados para o admin
 // revisar/completar (EAP, datas, impactos) antes de salvar de fato.
 function apiPedidoParaObraContexto(token, id) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'editar');
   const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
   if (!pedido) throw new Error('Pedido não encontrado.');
 
@@ -251,7 +251,7 @@ function apiPedidoParaObraContexto(token, id) {
 // Vincula definitivamente um pedido à obra que foi criada a partir dele —
 // chamado depois que o admin salva a Nova Obra pré-preenchida.
 function apiVincularPedidoObra(token, idPedido, idObra) {
-  exigirEquipe_(token);
+  exigir_(token, 'pedidos', 'editar');
   const pedido = comLock_(() => {
     const p = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(x => x.ID === idPedido);
     if (!p) throw new Error('Pedido não encontrado.');

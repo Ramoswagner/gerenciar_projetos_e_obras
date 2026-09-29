@@ -8,14 +8,43 @@ let TOKEN = sessionStorage.getItem('obrasHbToken')||'';
 let PAPEL = sessionStorage.getItem('obrasHbPapel')||'';
 let NOME  = sessionStorage.getItem('obrasHbNome')||'';
 let CARGO = sessionStorage.getItem('obrasHbCargo')||'';
+let PERMS = null;
+try { PERMS = JSON.parse(sessionStorage.getItem('obrasHbPerms')||'null'); } catch(e) { PERMS = null; }
 
-function initAdmin(){
-  if(TOKEN && PAPEL){ renderHome(); } else { renderLogin(); }
+// Permissão do perfil logado ("módulo.ação"). Só decide o que a tela
+// mostra; o servidor confere de novo em toda chamada.
+function pode(perm){
+  return PAPEL === 'PMO' || (PERMS || []).indexOf(perm) >= 0;
+}
+
+async function initAdmin(){
+  if(!(TOKEN && PAPEL)){ renderLogin(); return; }
+  if(!PERMS){
+    // sessão aberta antes das permissões configuráveis: busca uma vez
+    loading('Carregando seu acesso…');
+    try{
+      const s = await gs('apiMinhaSessao', TOKEN);
+      guardarSessao_({ token: TOKEN, papel: s.papel, nome: s.nome, cargo: s.cargo, permissoes: s.permissoes });
+    }catch(e){
+      if(!tratarErroSessao(e)){ limparSessao_(); renderLogin(); }
+      return;
+    }
+  }
+  renderHome();
+}
+
+function guardarSessao_(r){
+  TOKEN=r.token; PAPEL=r.papel; NOME=r.nome; CARGO=r.cargo||''; PERMS=r.permissoes||[];
+  sessionStorage.setItem('obrasHbToken',TOKEN);
+  sessionStorage.setItem('obrasHbPapel',PAPEL);
+  sessionStorage.setItem('obrasHbNome',NOME);
+  sessionStorage.setItem('obrasHbCargo',CARGO);
+  sessionStorage.setItem('obrasHbPerms',JSON.stringify(PERMS));
 }
 
 function limparSessao_(){
-  ['obrasHbToken','obrasHbPapel','obrasHbNome','obrasHbCargo'].forEach(k=>sessionStorage.removeItem(k));
-  TOKEN='';PAPEL='';NOME='';CARGO='';
+  ['obrasHbToken','obrasHbPapel','obrasHbNome','obrasHbCargo','obrasHbPerms'].forEach(k=>sessionStorage.removeItem(k));
+  TOKEN='';PAPEL='';NOME='';CARGO='';PERMS=null;
 }
 
 // Chamada pelos handlers de erro das telas: se a mensagem indica sessão
@@ -52,11 +81,7 @@ async function fazerLogin(){
   const btn=$('btnLogin');btn.disabled=true;btn.innerHTML='<span class="ico">hourglass_top</span>Entrando…';
   try{
     const r = await gs('login', email, senha);
-    TOKEN=r.token; PAPEL=r.papel; NOME=r.nome; CARGO=r.cargo||'';
-    sessionStorage.setItem('obrasHbToken',TOKEN);
-    sessionStorage.setItem('obrasHbPapel',PAPEL);
-    sessionStorage.setItem('obrasHbNome',NOME);
-    sessionStorage.setItem('obrasHbCargo',CARGO);
+    guardarSessao_(r);
     renderHome();
   }catch(e){
     const el=$('loginErr');el.textContent=e.message;el.style.display='block';

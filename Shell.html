@@ -10,49 +10,47 @@
 // casca fica completa desde já sem depender das telas existirem.
 const ROTAS = {};
 
-// Fase 11: papel Responsável tem sidebar DELIBERADAMENTE reduzida — só
-// "Minhas Atividades" (papeis:['Responsavel'] nesse item). Todos os
-// outros itens ganham papeis:['PMO','Engenharia'] pra ficarem invisíveis
-// pra esse papel (o filtro em montarShell_ já suporta isso, só faltava
-// declarar a restrição em cada item).
+// Cada item declara a permissão que exige (`perm`, "módulo.ação" — ver
+// MODULOS em Permissoes.gs; 'PMO' = exclusivo do PMO). O menu mostra só o
+// que o perfil logado pode abrir; a proteção de verdade é do servidor.
 const SIDEBAR_SECOES = [
   {titulo:'Gestão', itens:[
-    {id:'painel', ico:'space_dashboard', label:'Painel de Controle', sub:'kanban · execução', papeis:['PMO','Engenharia'],
+    {id:'painel', ico:'space_dashboard', label:'Painel de Controle', sub:'kanban · execução', perm:'painel.ler',
      desc:'Kanban unificado do ciclo de vida (Pedido → Manifestação → Cronograma → Validado → Em Obra → Finalizado, com Cancelado como saída paralela) e dashboard resumido de execução.'}
   ]},
   {titulo:'Iniciação', itens:[
-    {id:'pedidos', ico:'forum', label:'Pedidos', papeis:['PMO','Engenharia'],
+    {id:'pedidos', ico:'forum', label:'Pedidos', perm:'pedidos.ler',
      desc:'Solicitações de obra recebidas das áreas do hospital — análise, conversa com o solicitante e conversão em obra.'},
-    {id:'obras', ico:'domain', label:'Obras', sub:'manifestações', papeis:['PMO','Engenharia'],
+    {id:'obras', ico:'domain', label:'Obras', sub:'manifestações', perm:'projetos.ler',
      desc:'Cadastro TAP 5W2H, EAP, publicação e manifestações das áreas.'},
-    {id:'areas', ico:'domain_verification', label:'Áreas propostas', papeis:['PMO','Engenharia'],
+    {id:'areas', ico:'domain_verification', label:'Áreas propostas', perm:'areas.ler',
      desc:'Nomes de área novos sugeridos nas manifestações, aguardando decisão do PMO.'}
   ]},
   {titulo:'Planejamento', itens:[
-    {id:'cronogramapmo', ico:'timeline', label:'Cronograma', sub:'visão do PMO', papeis:['PMO','Engenharia'],
+    {id:'cronogramapmo', ico:'timeline', label:'Cronograma', sub:'visão do PMO', perm:'cronograma.ler',
      desc:'Fila de validação, cronogramas validados e Gantt — reuniões e Pull Planning ficam dentro de cada obra.'}
   ]},
   {titulo:'Execução e Monitoramento', itens:[
-    {id:'execucao', ico:'engineering', label:'Execução', papeis:['PMO','Engenharia'],
+    {id:'execucao', ico:'engineering', label:'Execução', perm:'execucao.ler',
      desc:'Acompanhamento operacional completo das obras em andamento.'},
-    {id:'lookahead', ico:'calendar_view_week', label:'Lookahead Planning', sub:'remoção de impedimentos', papeis:['PMO','Engenharia'],
+    {id:'lookahead', ico:'calendar_view_week', label:'Lookahead Planning', sub:'remoção de impedimentos', perm:'execucao.ler',
      desc:'Janela móvel de 6 semanas revisando as restrições capturadas no Pull Planning até estarem liberadas.'},
-    {id:'compromisso', ico:'fact_check', label:'Compromisso Semanal', sub:'atividades · PPC', papeis:['PMO','Engenharia'],
+    {id:'compromisso', ico:'fact_check', label:'Compromisso Semanal', sub:'atividades · PPC', perm:'execucao.ler',
      desc:'Escolha semanal do que será executado, com PPC e causa categorizada de não-cumprimento.'},
-    {id:'pagamentos', ico:'payments', label:'Pagamentos', sub:'medição · curva S', papeis:['PMO','Engenharia'],
+    {id:'pagamentos', ico:'payments', label:'Pagamentos', sub:'medição · curva S', perm:'medicoes.ler',
      desc:'Plano de pagamento por atividade, medições com evidência, aprovação final do PMO e cronograma físico-financeiro.'}
   ]},
   {titulo:'Encerramento', itens:[
-    {id:'encerramento', ico:'verified', label:'Encerramento', sub:'finalizado · cancelado', papeis:['PMO','Engenharia'],
+    {id:'encerramento', ico:'verified', label:'Encerramento', sub:'finalizado · cancelado', perm:'encerramento.ler',
      desc:'Inspeção técnica, checklist de qualidade, documentos as-built e assinaturas de aceite final.'}
   ]},
   {titulo:'Minhas Atividades', itens:[
-    {id:'minhasatividades', ico:'construction', label:'Minhas Atividades', papeis:['Responsavel'],
+    {id:'minhasatividades', ico:'construction', label:'Minhas Atividades', perm:'minhas.editar',
      desc:'Pacotes de trabalho sob sua responsabilidade — marque o andamento conforme executa.'}
   ]},
   {titulo:'Administração', itens:[
-    {id:'usuarios', ico:'group', label:'Usuários', papeis:['PMO'],
-     desc:'Ativação e gestão dos logins individuais — exclusivo do PMO.'}
+    {id:'configuracoes', ico:'admin_panel_settings', label:'Configurações', sub:'usuários · permissões', perm:'PMO',
+     desc:'Usuários, perfis e permissões, e quem aprova cada portão — exclusivo do PMO.'}
   ]}
 ];
 
@@ -86,7 +84,7 @@ function montarShell_(){
   const el=document.getElementById('app');
   if(el.classList.contains('shell-mode') && $('shellConteudo')) return; // já montada
   const secoes = SIDEBAR_SECOES.map(sec=>{
-    const itens = sec.itens.filter(i=>!i.papeis || i.papeis.indexOf(PAPEL)>=0);
+    const itens = sec.itens.filter(itemVisivel_);
     if(!itens.length) return '';
     const links = itens.map(i=>{
       const label='<span class="nav-label">'+esc(i.label)+(i.sub?'<span class="nav-sub">· '+esc(i.sub)+'</span>':'')+'</span>';
@@ -102,7 +100,10 @@ function montarShell_(){
     <div class="sb-nav-scroll">${secoes}</div>
     <div class="sb-footer">
       <div class="sb-user"><span class="ico" style="font-size:18px">account_circle</span><span class="sb-user-nome">${esc(NOME)}<span class="sb-user-cargo">${esc(CARGO||'')}</span></span>${papelBadge()}</div>
-      <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;justify-content:center" title="Sair" onclick="fazerLogout()"><span class="ico" style="font-size:15px">logout</span><span class="nav-label">Sair</span></button>
+      <div class="sb-acoes">
+        <button class="btn btn-ghost" title="Trocar minha senha" onclick="abrirTrocarSenha()"><span class="ico" style="font-size:15px">key</span><span class="nav-label">Minha senha</span></button>
+        <button class="btn btn-ghost" title="Sair" onclick="fazerLogout()"><span class="ico" style="font-size:15px">logout</span><span class="nav-label">Sair</span></button>
+      </div>
     </div>
   </aside>
   <main class="shell-main" id="shellMain"><div class="shell-inner" id="shellConteudo"></div></main>`;
@@ -168,9 +169,19 @@ function renderEmBreve(id){
   renderShell(id, h);
 }
 
-// Home após o login — Responsável cai direto em "Minhas Atividades" (não
-// tem acesso ao Painel de Controle, sidebar reduzida de propósito).
+function itemVisivel_(i){
+  return i.perm === 'PMO' ? PAPEL === 'PMO' : pode(i.perm);
+}
+
+// Home após o login: o Painel, ou a primeira tela que o perfil pode abrir
+// (o Responsável de campo cai direto em "Minhas Atividades").
 function renderHome(){
-  navTo(PAPEL==='Responsavel' ? 'minhasatividades' : 'painel');
+  for (const sec of SIDEBAR_SECOES) {
+    const it = sec.itens.find(itemVisivel_);
+    if (it) { navTo(it.id); return; }
+  }
+  renderShell('', '<div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">lock</span>'
+    + '<h2 style="justify-content:center;margin-top:10px">Seu perfil ainda não tem telas liberadas</h2>'
+    + '<p style="color:var(--muted)">Peça ao PMO para ajustar as permissões do perfil ' + esc(PAPEL) + '.</p></div>');
 }
 </script>

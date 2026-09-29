@@ -18,10 +18,10 @@ function apiSalvarUsuario(token, dados) {
   const nome = sanitize_(dados.Nome, 120);
   const email = normalizarEmail_(dados.Email);
   const cargo = sanitize_(dados.Cargo, 120);
-  const papel = PAPEIS.indexOf(dados.Papel) >= 0 ? dados.Papel : null;
+  const papel = perfisValidos_().indexOf(dados.Papel) >= 0 ? dados.Papel : null;
   const status = dados.Status === 'inativo' ? 'inativo' : 'ativo';
 
-  if (!nome || !email || !papel) throw new Error('Preencha nome, e-mail e papel.');
+  if (!nome || !email || !papel) throw new Error('Preencha nome, e-mail e perfil.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail inválido.');
 
   return comLock_(() => {

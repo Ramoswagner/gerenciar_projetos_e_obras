@@ -26,7 +26,7 @@ function invalidarCacheEncerramentoResumo_() {
 }
 
 function apiSalvarItemChecklist(token, dados) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'encerramento', 'editar');
   dados = dados || {};
   const idObra = sanitize_(dados.IDObra, 30);
   if (!idObra) throw new Error('Obra inválida.');
@@ -59,7 +59,7 @@ function apiSalvarItemChecklist(token, dados) {
 // Reversível de propósito — é revisão técnica interna durante o
 // encerramento, corrigir um posicionamento errado é operação normal.
 function apiPosicionarItemChecklist(token, idItem, posicionamento, observacaoObjecao) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'encerramento', 'editar');
   if (ENCERRAMENTO_POSICIONAMENTO_OPCOES.indexOf(posicionamento) < 0) throw new Error('Posicionamento inválido.');
   if (posicionamento === 'Objeção' && !sanitize_(observacaoObjecao, 1000)) {
     throw new Error('Descreva a objeção.');
@@ -78,7 +78,7 @@ function apiPosicionarItemChecklist(token, idItem, posicionamento, observacaoObj
 }
 
 function apiExcluirItemChecklist(token, idItem) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'encerramento', 'excluir');
   return comLock_(() => {
     const item = readAll_(SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS).find(c => c.ID === idItem);
     if (!item) throw new Error('Item de checklist não encontrado.');
@@ -108,7 +108,7 @@ function formatarTamanho_(bytes) {
 }
 
 function apiUploadDocumentoEncerramento(token, idObra, nomeArquivo, mimeType, base64Data) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'encerramento', 'editar');
   idObra = sanitize_(idObra, 30);
   if (!idObra) throw new Error('Obra inválida.');
   nomeArquivo = sanitize_(nomeArquivo, 180) || 'documento';
@@ -137,7 +137,7 @@ function apiUploadDocumentoEncerramento(token, idObra, nomeArquivo, mimeType, ba
 }
 
 function apiExcluirDocumentoEncerramento(token, idDocumento) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'encerramento', 'excluir');
   return comLock_(() => {
     const documento = readAll_(SHEETS.ENCERRAMENTO_DOCUMENTOS, ENCERRAMENTO_DOCUMENTOS_HEADERS).find(d => d.ID === idDocumento);
     if (!documento) throw new Error('Documento não encontrado.');
@@ -149,7 +149,7 @@ function apiExcluirDocumentoEncerramento(token, idDocumento) {
 // ────────────────────────────────────────────── ASSINATURAS ──
 
 function apiSalvarSignatario(token, idObra, nomeSignatario, cargo, idUsuario) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'encerramento', 'editar');
   idObra = sanitize_(idObra, 30);
   nomeSignatario = sanitize_(nomeSignatario, 120);
   if (!idObra || !nomeSignatario) throw new Error('Informe o nome do signatário.');
@@ -168,7 +168,7 @@ function apiSalvarSignatario(token, idObra, nomeSignatario, cargo, idUsuario) {
 }
 
 function apiExcluirSignatario(token, idSignatario) {
-  exigirPapel_(token, ['Engenharia', 'PMO']);
+  exigir_(token, 'encerramento', 'excluir');
   return comLock_(() => {
     const signatario = readAll_(SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS).find(s => s.ID === idSignatario);
     if (!signatario) throw new Error('Signatário não encontrado.');
@@ -188,7 +188,7 @@ function apiExcluirSignatario(token, idSignatario) {
 // assinatura em nome dele — representa o registro de uma assinatura física
 // já obtida fora do sistema, prática comum em handover de obra.
 function apiAssinarDocumento(token, idAssinatura) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'encerramento', 'editar');
   return comLock_(() => {
     const signatario = readAll_(SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS).find(s => s.ID === idAssinatura);
     if (!signatario) throw new Error('Signatário não encontrado.');
@@ -237,7 +237,7 @@ function apiFinalizarObra(token, idObra) {
 // Portfólio — obras que já passaram da fase de manifestação (candidatas a
 // encerramento). Alimenta o filtro/lista da tela.
 function apiEncerramentoResumo(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'encerramento', 'ler');
   const hit = cacheLer_(CACHE_ENCERRAMENTO_RESUMO);
   if (hit) return hit;
   prepararAbas_([SHEETS.OBRAS, SHEETS.ENCERRAMENTO_CHECKLIST, SHEETS.ENCERRAMENTO_ASSINATURAS]);
@@ -262,7 +262,7 @@ function apiEncerramentoResumo(token) {
 }
 
 function apiGetEncerramento(token, idObra) {
-  exigirEquipe_(token);
+  exigir_(token, 'encerramento', 'ler');
   prepararAbas_([SHEETS.OBRAS, SHEETS.ENCERRAMENTO_CHECKLIST, SHEETS.ENCERRAMENTO_DOCUMENTOS, SHEETS.ENCERRAMENTO_ASSINATURAS]);
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
   if (!obra) throw new Error('Obra não encontrada.');

@@ -11,7 +11,7 @@ function invalidarCacheObras_() {
 }
 
 function apiListarObras(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'ler');
   const hit = cacheLer_(CACHE_LISTA_OBRAS);
   if (hit) return hit;
   prepararAbas_([SHEETS.OBRAS, SHEETS.MANIF, SHEETS.CRONOGRAMA]);
@@ -46,7 +46,7 @@ function apiListarObras(token) {
 }
 
 function apiGetObraAdmin(token, id) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'ler');
   prepararAbas_([SHEETS.OBRAS, SHEETS.EAP, SHEETS.MANIF, SHEETS.REQUISITOS, SHEETS.DECISOES_PRAZO,
     SHEETS.ATAS, SHEETS.ETAPAS, SHEETS.CRONOGRAMA, SHEETS.RISCOS, SHEETS.RESTRICOES,
     SHEETS.RESTRICOES_EVIDENCIAS, SHEETS.USUARIOS]);
@@ -74,14 +74,13 @@ function apiGetObraAdmin(token, id) {
     prazoDiasUteis: parseInt(cfg.PRAZO_DIAS_UTEIS, 10) || 5,
     // Fase 11: usuários papel Responsável ativos — alimenta o vínculo
     // ResponsavelUserId por pacote no editor de Cronograma.
-    responsaveis: readAll_(SHEETS.USUARIOS, USUARIOS_HEADERS)
-      .filter(u => u.Papel === 'Responsavel' && u.Status === 'ativo')
+    responsaveis: usuariosComPermissao_('minhas', 'editar')
       .map(u => ({ ID: u.ID, Nome: u.Nome }))
   };
 }
 
 function apiNovaObraContexto(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'editar');
   const cfg = getConfig_();
   return {
     areas: cfg._areas, setores: cfg._setores,
@@ -90,7 +89,7 @@ function apiNovaObraContexto(token) {
 }
 
 function apiSalvarObra(token, dados, eapItens) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'editar');
   dados = dados || {};
   const linkPlanta = sanitize_(dados.LinkPlanta, 500);
   if (linkPlanta && !/^https?:\/\//i.test(linkPlanta)) {
@@ -151,7 +150,7 @@ function salvarEap_(idObra, itens) {
 }
 
 function apiPublicarObra(token, id) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'editar');
   const obra = comLock_(() => {
     const o = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(x => x.ID === id);
     if (!o) throw new Error('Obra não encontrada.');
@@ -171,7 +170,7 @@ function apiPublicarObra(token, id) {
 // Somente leitura — não altera Status. Use para reobter o texto/link
 // de uma obra já publicada (botão "copiar mensagem" no painel).
 function apiMensagemGrupo(token, id) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'ler');
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
   if (!obra) throw new Error('Obra não encontrada.');
   const link = linkObra_(id);
@@ -192,7 +191,7 @@ function montarMensagemGrupo_(obra, link) {
 }
 
 function apiMudarStatus(token, id, novoStatus) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'editar');
   // 'Manifestação encerrada' só via apiDecidirPrazo (justificativa
   // registrada); 'Cancelada' só via apiCancelarObra (Fase 5); 'Finalizado'
   // só via apiFinalizarObra (Encerramento, Fase 10).
@@ -216,7 +215,7 @@ function apiMudarStatus(token, id, novoStatus) {
 // justificativa. Distinto de 'Manifestação encerrada' (que só fecha a
 // janela de manifestação, a obra continua viva).
 function apiCancelarObra(token, idObra, motivo) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'projetos', 'cancelar');
   const just = sanitize_(motivo, 2000);
   if (!just) throw new Error('Justifique o cancelamento.');
   return comLock_(() => {
@@ -237,7 +236,7 @@ function apiCancelarObra(token, idObra, motivo) {
 // ────────────────────────────────────────────── DECISÕES DE PRAZO ──
 
 function apiDecidirPrazo(token, idObra, tipoDecisao, novoPrazo, justificativa) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'projetos', 'editar');
   if (TIPO_DECISAO_PRAZO.indexOf(tipoDecisao) < 0) throw new Error('Tipo de decisão inválido.');
   const just = sanitize_(justificativa, 2000);
   if (!just) throw new Error('Justifique a decisão.');
@@ -384,7 +383,7 @@ function proporArea_(nome, propostoPor, cargoPropoente, idObraOrigem) {
 
 // Qualquer papel logado vê a fila (PMO decide; Engenharia acompanha).
 function apiListarAreasPropostas(token) {
-  exigirEquipe_(token);
+  exigir_(token, 'areas', 'ler');
   return readAll_(SHEETS.AREAS_PROP, AREAS_PROP_HEADERS)
     .filter(a => a.Status === 'Pendente')
     .reverse();
@@ -413,7 +412,7 @@ function apiDecidirAreaProposta(token, id, aprovar, observacoes) {
 // ────────────────────────────────────────────── ATAS (PULL PLANNING) ──
 
 function apiCriarAta(token, idObra, dataReuniao, participantes, resumo) {
-  const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
+  const sessao = exigir_(token, 'projetos', 'editar');
   const data = sanitize_(dataReuniao, 20);
   const part = sanitize_(participantes, 2000);
   const res = sanitize_(resumo, 5000);
@@ -435,7 +434,7 @@ function apiCriarAta(token, idObra, dataReuniao, participantes, resumo) {
 // ────────────────────────────────────────────── REQUISITOS ──
 
 function apiCriarRequisito(token, idObra, idManif, descricao, responsavel) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'editar');
   const desc = sanitize_(descricao, 3000);
   if (!desc) throw new Error('Descrição do requisito vazia.');
   return comLock_(() => {
@@ -458,7 +457,7 @@ function apiCriarRequisito(token, idObra, idManif, descricao, responsavel) {
 }
 
 function apiAtualizarRequisito(token, idRequisito, novoStatus, observacoes) {
-  exigirEquipe_(token);
+  exigir_(token, 'projetos', 'editar');
   if (REQUISITO_STATUS.indexOf(novoStatus) < 0) throw new Error('Status de requisito inválido.');
   return comLock_(() => {
     const req = readAll_(SHEETS.REQUISITOS, REQUISITOS_HEADERS).find(r => r.ID === idRequisito);
