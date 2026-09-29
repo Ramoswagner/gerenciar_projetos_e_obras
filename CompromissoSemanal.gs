@@ -24,7 +24,7 @@ function fimDaSemana_(inicioIso) {
 // invalidado nos 3 escritores deste mesmo arquivo.
 const CACHE_COMPROMISSO_SEMANAL = 'admin_compromisso_semanal_v1';
 function invalidarCacheCompromissoSemanal_() {
-  CacheService.getScriptCache().remove(CACHE_COMPROMISSO_SEMANAL);
+  cacheRemover_(CACHE_COMPROMISSO_SEMANAL);
 }
 
 // Só um compromisso por Pacote por semana — não faz sentido comprometer o
@@ -74,12 +74,13 @@ function apiMarcarCompromisso(token, idCompromisso, status, categoriaNaoCumprime
   try {
     const compromisso = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS).find(c => c.ID === idCompromisso);
     if (!compromisso) throw new Error('Compromisso não encontrado.');
-    const sh = ss_().getSheetByName(SHEETS.COMPROMISSO_SEMANAL);
-    const col = (h) => COMPROMISSO_SEMANAL_HEADERS.indexOf(h) + 1;
-    sh.getRange(compromisso._row, col('Status')).setValue(status);
-    sh.getRange(compromisso._row, col('CategoriaNaoCumprimento')).setValue(status === 'Não cumprido' ? categoriaNaoCumprimento : '');
-    sh.getRange(compromisso._row, col('DetalhesNaoCumprimento')).setValue(status === 'Não cumprido' ? sanitize_(detalhes, 1000) : '');
-    sh.getRange(compromisso._row, col('AtualizadoEm')).setValue(nowIso_());
+    const naoCumprido = status === 'Não cumprido';
+    atualizarCampos_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS, compromisso._row, {
+      Status: status,
+      CategoriaNaoCumprimento: naoCumprido ? categoriaNaoCumprimento : '',
+      DetalhesNaoCumprimento: naoCumprido ? sanitize_(detalhes, 1000) : '',
+      AtualizadoEm: nowIso_()
+    });
     invalidarCacheCompromissoSemanal_();
     return { ok: true };
   } finally {
@@ -120,7 +121,7 @@ function calcularPPC_(compromissosDaSemana) {
 // Pacotes do cronograma da obra que AINDA NÃO têm compromisso na semana
 // atual — alimenta a lista de "comprometer" na tela.
 function apiPacotesParaComprometer(token, idObra) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const inicioSemana = isoDoDate_(inicioSemana_(new Date()));
   const jaComprometidos = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS)
     .filter(c => c.DataInicioSemana === inicioSemana).map(c => c.IDPacote);
@@ -130,10 +131,9 @@ function apiPacotesParaComprometer(token, idObra) {
 }
 
 function apiCompromissoSemanal(token) {
-  validarToken_(token);
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get(CACHE_COMPROMISSO_SEMANAL);
-  if (hit) return JSON.parse(hit);
+  exigirEquipe_(token);
+  const hit = cacheLer_(CACHE_COMPROMISSO_SEMANAL);
+  if (hit) return hit;
 
   const compromissos = readAll_(SHEETS.COMPROMISSO_SEMANAL, COMPROMISSO_SEMANAL_HEADERS);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
@@ -170,6 +170,6 @@ function apiCompromissoSemanal(token) {
     totalSemanaAtual: compromissosSemanaAtual.length,
     tendencia: tendencia
   };
-  cache.put(CACHE_COMPROMISSO_SEMANAL, JSON.stringify(resultado), 120);
+  cacheGravar_(CACHE_COMPROMISSO_SEMANAL, resultado, 120);
   return resultado;
 }

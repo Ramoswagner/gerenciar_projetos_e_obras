@@ -22,7 +22,7 @@
 // escritores relevantes vivem neste mesmo arquivo.
 const CACHE_ENCERRAMENTO_RESUMO = 'admin_encerramento_resumo_v1';
 function invalidarCacheEncerramentoResumo_() {
-  CacheService.getScriptCache().remove(CACHE_ENCERRAMENTO_RESUMO);
+  cacheRemover_(CACHE_ENCERRAMENTO_RESUMO);
 }
 
 function apiSalvarItemChecklist(token, dados) {
@@ -73,11 +73,11 @@ function apiPosicionarItemChecklist(token, idItem, posicionamento, observacaoObj
   try {
     const item = readAll_(SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS).find(c => c.ID === idItem);
     if (!item) throw new Error('Item de checklist não encontrado.');
-    const sh = ss_().getSheetByName(SHEETS.ENCERRAMENTO_CHECKLIST);
-    const col = (h) => ENCERRAMENTO_CHECKLIST_HEADERS.indexOf(h) + 1;
-    sh.getRange(item._row, col('Posicionamento')).setValue(posicionamento);
-    sh.getRange(item._row, col('ObservacaoObjecao')).setValue(posicionamento === 'Objeção' ? sanitize_(observacaoObjecao, 1000) : '');
-    sh.getRange(item._row, col('AtualizadoEm')).setValue(nowIso_());
+    atualizarCampos_(SHEETS.ENCERRAMENTO_CHECKLIST, ENCERRAMENTO_CHECKLIST_HEADERS, item._row, {
+      Posicionamento: posicionamento,
+      ObservacaoObjecao: posicionamento === 'Objeção' ? sanitize_(observacaoObjecao, 1000) : '',
+      AtualizadoEm: nowIso_()
+    });
     invalidarCacheEncerramentoResumo_();
     return { ok: true };
   } finally {
@@ -230,10 +230,9 @@ function apiAssinarDocumento(token, idAssinatura) {
     if (checklist.some(c => c.Posicionamento === 'Pendente')) {
       throw new Error('Ainda há itens do checklist pendentes — resolva-os (Ciente ou Objeção) antes de assinar.');
     }
-    const sh = ss_().getSheetByName(SHEETS.ENCERRAMENTO_ASSINATURAS);
-    const col = (h) => ENCERRAMENTO_ASSINATURAS_HEADERS.indexOf(h) + 1;
-    sh.getRange(signatario._row, col('Status')).setValue('Assinado');
-    sh.getRange(signatario._row, col('AssinadoEm')).setValue(nowIso_());
+    atualizarCampos_(SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS, signatario._row, {
+      Status: 'Assinado', AssinadoEm: nowIso_()
+    });
     invalidarCacheEncerramentoResumo_();
     return { ok: true };
   } finally {
@@ -246,27 +245,23 @@ function apiAssinarDocumento(token, idAssinatura) {
 // Só PMO — mesmo princípio de gate final já usado em apiValidarCronograma.
 // Exige ao menos 1 signatário cadastrado e TODOS "Assinado".
 function apiFinalizarObra(token, idObra) {
-  const sessao = exigirPMO_(token);
-  const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
-  if (!obra) throw new Error('Obra não encontrada.');
-  if (obra.Status === 'Finalizado') throw new Error('Esta obra já está finalizada.');
-  if (obra.Status === 'Cancelada') throw new Error('Obra cancelada não pode ser finalizada.');
-  const assinaturas = readAll_(SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS).filter(a => a.IDObra === idObra);
-  if (!assinaturas.length) throw new Error('Cadastre ao menos um signatário antes de finalizar.');
-  if (assinaturas.some(a => a.Status !== 'Assinado')) {
-    throw new Error('Ainda há signatário(s) pendente(s) — todas as assinaturas precisam estar concluídas antes de finalizar.');
-  }
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
-    const sh = ss_().getSheetByName(SHEETS.OBRAS);
-    sh.getRange(obra._row, OBRAS_HEADERS.indexOf('Status') + 1).setValue('Finalizado');
-    invalidarCacheObras_();
-    invalidarCacheEncerramentoResumo_();
-    return { ok: true };
-  } finally {
-    lock.releaseLock();
-  }
+  exigirPMO_(token);
+  comLock_(() => {
+    const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
+    if (!obra) throw new Error('Obra não encontrada.');
+    if (obra.Status === 'Finalizado') throw new Error('Esta obra já está finalizada.');
+    if (obra.Status === 'Cancelada') throw new Error('Obra cancelada não pode ser finalizada.');
+    const assinaturas = readAll_(SHEETS.ENCERRAMENTO_ASSINATURAS, ENCERRAMENTO_ASSINATURAS_HEADERS).filter(a => a.IDObra === idObra);
+    if (!assinaturas.length) throw new Error('Cadastre ao menos um signatário antes de finalizar.');
+    if (assinaturas.some(a => a.Status !== 'Assinado')) {
+      throw new Error('Ainda há signatário(s) pendente(s) — todas as assinaturas precisam estar concluídas antes de finalizar.');
+    }
+    atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, obra._row, { Status: 'Finalizado', AtualizadoEm: nowIso_() });
+  });
+  invalidarCacheObras_();
+  invalidarCacheEncerramentoResumo_();
+  cacheRemover_('pub_obra_' + idObra);
+  return { ok: true };
 }
 
 // ────────────────────────────────────────────── LEITURA AGREGADA (tela) ──
@@ -274,10 +269,9 @@ function apiFinalizarObra(token, idObra) {
 // Portfólio — obras que já passaram da fase de manifestação (candidatas a
 // encerramento). Alimenta o filtro/lista da tela.
 function apiEncerramentoResumo(token) {
-  validarToken_(token);
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get(CACHE_ENCERRAMENTO_RESUMO);
-  if (hit) return JSON.parse(hit);
+  exigirEquipe_(token);
+  const hit = cacheLer_(CACHE_ENCERRAMENTO_RESUMO);
+  if (hit) return hit;
 
   const elegiveis = ['Liberada', 'Em execução', 'Concluída', 'Finalizado'];
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).filter(o => elegiveis.indexOf(o.Status) >= 0);
@@ -294,12 +288,12 @@ function apiEncerramentoResumo(token) {
       assinaturasCompletas: assinaturasDaObra.length ? assinaturasDaObra.every(a => a.Status === 'Assinado') : false
     };
   }).sort((a, b) => a.Titulo.localeCompare(b.Titulo));
-  cache.put(CACHE_ENCERRAMENTO_RESUMO, JSON.stringify(resultado), 120);
+  cacheGravar_(CACHE_ENCERRAMENTO_RESUMO, resultado, 120);
   return resultado;
 }
 
 function apiGetEncerramento(token, idObra) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
   if (!obra) throw new Error('Obra não encontrada.');
   return {

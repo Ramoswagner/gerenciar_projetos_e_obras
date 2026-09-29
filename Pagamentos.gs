@@ -21,7 +21,7 @@
 // arquivo, invalidação barata.
 const CACHE_PAGAMENTOS_RESUMO = 'admin_pagamentos_resumo_v1';
 function invalidarCachePagamentosResumo_() {
-  CacheService.getScriptCache().remove(CACHE_PAGAMENTOS_RESUMO);
+  cacheRemover_(CACHE_PAGAMENTOS_RESUMO);
 }
 
 function apiSalvarParcela(token, dados) {
@@ -129,13 +129,12 @@ function apiAprovarMedicao(token, idMedicao, aprovado, observacoes) {
     const medicao = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS).find(m => m.ID === idMedicao);
     if (!medicao) throw new Error('Medição não encontrada.');
     if (medicao.StatusAprovacao !== 'Pendente') throw new Error('Esta medição já foi decidida e não pode ser alterada.');
-    const sh = ss_().getSheetByName(SHEETS.MEDICOES);
-    const col = (h) => MEDICOES_HEADERS.indexOf(h) + 1;
-    const novoStatus = aprovado ? 'Aprovada' : 'Rejeitada';
-    sh.getRange(medicao._row, col('StatusAprovacao')).setValue(novoStatus);
-    sh.getRange(medicao._row, col('AprovadoPor')).setValue(sessao.nome);
-    sh.getRange(medicao._row, col('AprovadoEm')).setValue(nowIso_());
-    sh.getRange(medicao._row, col('ObservacoesPMO')).setValue(sanitize_(observacoes, 1000));
+    atualizarCampos_(SHEETS.MEDICOES, MEDICOES_HEADERS, medicao._row, {
+      StatusAprovacao: aprovado ? 'Aprovada' : 'Rejeitada',
+      AprovadoPor: sessao.nome,
+      AprovadoEm: nowIso_(),
+      ObservacoesPMO: sanitize_(observacoes, 1000)
+    });
     invalidarCachePagamentosResumo_();
     return { ok: true };
   } finally {
@@ -324,7 +323,7 @@ function curvaSFisicoFinanceira_(baseline, medicoesAprovadas) {
 }
 
 function apiCurvaS(token, idObra) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS).filter(b => b.IDObra === idObra);
   const medicoesAprovadas = readAll_(SHEETS.MEDICOES, MEDICOES_HEADERS)
     .filter(m => m.IDObra === idObra && m.StatusAprovacao === 'Aprovada');
@@ -344,10 +343,9 @@ function apiCurvaS(token, idObra) {
 // Portfólio — só obras que já têm Baseline (as únicas que podem ter plano
 // de pagamento). Alimenta a lista/filtro da tela Pagamentos.
 function apiPagamentosResumo(token) {
-  validarToken_(token);
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get(CACHE_PAGAMENTOS_RESUMO);
-  if (hit) return JSON.parse(hit);
+  exigirEquipe_(token);
+  const hit = cacheLer_(CACHE_PAGAMENTOS_RESUMO);
+  if (hit) return hit;
 
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
@@ -377,7 +375,7 @@ function apiPagamentosResumo(token) {
       qtdMedicoesPendentes: qtdMedicoesPendentes
     };
   }).sort((a, b) => a.Titulo.localeCompare(b.Titulo));
-  cache.put(CACHE_PAGAMENTOS_RESUMO, JSON.stringify(resultado), 120);
+  cacheGravar_(CACHE_PAGAMENTOS_RESUMO, resultado, 120);
   return resultado;
 }
 
@@ -385,7 +383,7 @@ function apiPagamentosResumo(token) {
 // parcelas e medições (com evidências) aninhadas, pronto pro cliente
 // agrupar sem chamadas extras.
 function apiPagamentosObra(token, idObra) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const baseline = readAll_(SHEETS.BASELINE, BASELINE_HEADERS).filter(b => b.IDObra === idObra)
     .sort((a, b) => String(a.DataInicioPrevista || '9999').localeCompare(String(b.DataInicioPrevista || '9999')));
   const parcelas = readAll_(SHEETS.PLANO_PAGAMENTO, PLANO_PAGAMENTO_HEADERS).filter(p => p.IDObra === idObra);

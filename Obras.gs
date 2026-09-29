@@ -7,14 +7,13 @@
 
 const CACHE_LISTA_OBRAS = 'admin_obras_lista_v1';
 function invalidarCacheObras_() {
-  CacheService.getScriptCache().remove(CACHE_LISTA_OBRAS);
+  cacheRemover_(CACHE_LISTA_OBRAS);
 }
 
 function apiListarObras(token) {
-  validarToken_(token);
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get(CACHE_LISTA_OBRAS);
-  if (hit) return JSON.parse(hit);
+  exigirEquipe_(token);
+  const hit = cacheLer_(CACHE_LISTA_OBRAS);
+  if (hit) return hit;
 
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
   const manifs = readAll_(SHEETS.MANIF, MANIF_HEADERS);
@@ -41,12 +40,12 @@ function apiListarObras(token) {
     StatusCronograma: o.StatusCronograma || '',
     cronograma: cronPorObra[o.ID] || null
   })).reverse();
-  cache.put(CACHE_LISTA_OBRAS, JSON.stringify(lista), 120);
+  cacheGravar_(CACHE_LISTA_OBRAS, lista, 120);
   return lista;
 }
 
 function apiGetObraAdmin(token, id) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
   if (!obra) throw new Error('Obra não encontrada: ' + id);
   obra.StatusCronograma = obra.StatusCronograma || 'Rascunho'; // obras antigas, sem migração de dados
@@ -78,7 +77,7 @@ function apiGetObraAdmin(token, id) {
 }
 
 function apiNovaObraContexto(token) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const cfg = getConfig_();
   return {
     areas: cfg._areas, setores: cfg._setores,
@@ -87,7 +86,8 @@ function apiNovaObraContexto(token) {
 }
 
 function apiSalvarObra(token, dados, eapItens) {
-  validarToken_(token);
+  exigirEquipe_(token);
+  dados = dados || {};
   const linkPlanta = sanitize_(dados.LinkPlanta, 500);
   if (linkPlanta && !/^https?:\/\//i.test(linkPlanta)) {
     throw new Error('O link do croqui/planta deve começar com http:// ou https://');
@@ -134,43 +134,35 @@ function apiSalvarObra(token, dados, eapItens) {
   }
 }
 
-// Reescreve a aba EAP numa única operação em lote: mantém em memória as
-// linhas das outras obras, substitui as da obra sendo salva e grava tudo
-// com um único setValues. Sempre chamada dentro do lock de apiSalvarObra.
+// Grava a EAP de UMA obra: só as linhas dessa obra são escritas, as das
+// outras obras não são tocadas (ver substituirLinhasDe_). Sempre chamada
+// dentro do lock de apiSalvarObra.
 function salvarEap_(idObra, itens) {
-  const sh = ss_().getSheetByName(SHEETS.EAP);
-  const mantidas = readAll_(SHEETS.EAP, EAP_HEADERS)
-    .filter(e => e.IDObra !== idObra)
-    .map(e => EAP_HEADERS.map(h => e[h]));
   const novas = itens
     .filter(it => sanitize_(it.Codigo, 20) && sanitize_(it.Descricao, 300))
     .map((it, i) => [
-      idObra + '-E' + ('00' + (i + 1)).slice(-2),
+      idObra + '-E' + largura_(i + 1, 2),
       idObra,
       sanitize_(it.Codigo, 20),
       sanitize_(it.Descricao, 300),
       sanitize_(it.NaturezaImpacto, 200)
     ]);
-  const todas = mantidas.concat(novas);
-  const last = sh.getLastRow();
-  if (last > 1) sh.getRange(2, 1, last - 1, EAP_HEADERS.length).clearContent();
-  if (todas.length) sh.getRange(2, 1, todas.length, EAP_HEADERS.length).setValues(todas);
+  substituirLinhasDe_(SHEETS.EAP, EAP_HEADERS, 'IDObra', idObra, novas);
 }
 
 function apiPublicarObra(token, id) {
-  validarToken_(token);
-  const sh = ss_().getSheetByName(SHEETS.OBRAS);
-  const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
-  if (!obra) throw new Error('Obra não encontrada.');
-  if (!obra.PrazoManifestacao) throw new Error('Defina o prazo de manifestação antes de publicar.');
-
-  const col = (h) => OBRAS_HEADERS.indexOf(h) + 1;
-  sh.getRange(obra._row, col('Status')).setValue('Publicada');
-  if (!obra.DataPublicacao) {
-    sh.getRange(obra._row, col('DataPublicacao')).setValue(nowIso_());
-  }
-  obra.DataPublicacao = obra.DataPublicacao || nowIso_();
+  exigirEquipe_(token);
+  const obra = comLock_(() => {
+    const o = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(x => x.ID === id);
+    if (!o) throw new Error('Obra não encontrada.');
+    if (!o.PrazoManifestacao) throw new Error('Defina o prazo de manifestação antes de publicar.');
+    if (['Cancelada', 'Finalizado'].indexOf(o.Status) >= 0) throw new Error('Obra ' + o.Status.toLowerCase() + ' não pode ser publicada.');
+    o.DataPublicacao = o.DataPublicacao || nowIso_();
+    atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, o._row, { Status: 'Publicada', DataPublicacao: o.DataPublicacao });
+    return o;
+  });
   invalidarCacheObras_();
+  cacheRemover_('pub_obra_' + id);
 
   const link = linkObra_(id);
   return { ok: true, link: link, mensagemGrupo: montarMensagemGrupo_(obra, link) };
@@ -179,7 +171,7 @@ function apiPublicarObra(token, id) {
 // Somente leitura — não altera Status. Use para reobter o texto/link
 // de uma obra já publicada (botão "copiar mensagem" no painel).
 function apiMensagemGrupo(token, id) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
   if (!obra) throw new Error('Obra não encontrada.');
   const link = linkObra_(id);
@@ -200,17 +192,22 @@ function montarMensagemGrupo_(obra, link) {
 }
 
 function apiMudarStatus(token, id, novoStatus) {
-  validarToken_(token);
+  exigirEquipe_(token);
   // 'Manifestação encerrada' só via apiDecidirPrazo (justificativa
   // registrada); 'Cancelada' só via apiCancelarObra (Fase 5); 'Finalizado'
   // só via apiFinalizarObra (Encerramento, Fase 10).
   const permitidos = ['Rascunho', 'Publicada', 'Liberada', 'Em execução', 'Concluída'];
   if (permitidos.indexOf(novoStatus) < 0) throw new Error('Status inválido.');
-  const sh = ss_().getSheetByName(SHEETS.OBRAS);
-  const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
-  if (!obra) throw new Error('Obra não encontrada.');
-  sh.getRange(obra._row, OBRAS_HEADERS.indexOf('Status') + 1).setValue(novoStatus);
+  comLock_(() => {
+    const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
+    if (!obra) throw new Error('Obra não encontrada.');
+    if (['Cancelada', 'Finalizado'].indexOf(obra.Status) >= 0) {
+      throw new Error('Obra ' + obra.Status.toLowerCase() + ' não muda mais de status.');
+    }
+    atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, obra._row, { Status: novoStatus, AtualizadoEm: nowIso_() });
+  });
   invalidarCacheObras_();
+  cacheRemover_('pub_obra_' + id);
   return { ok: true };
 }
 
@@ -229,13 +226,12 @@ function apiCancelarObra(token, idObra, motivo) {
     if (!obra) throw new Error('Obra não encontrada.');
     if (obra.Status === 'Cancelada') throw new Error('Esta obra já está cancelada.');
     if (obra.Status === 'Finalizado') throw new Error('Uma obra finalizada não pode ser cancelada.');
-    const sh = ss_().getSheetByName(SHEETS.OBRAS);
-    const col = (h) => OBRAS_HEADERS.indexOf(h) + 1;
-    sh.getRange(obra._row, col('Status')).setValue('Cancelada');
-    sh.getRange(obra._row, col('CanceladoPor')).setValue(sessao.nome + ' (' + sessao.papel + ')');
-    sh.getRange(obra._row, col('DataCancelamento')).setValue(nowIso_());
-    sh.getRange(obra._row, col('MotivoCancelamento')).setValue(just);
+    atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, obra._row, {
+      Status: 'Cancelada', CanceladoPor: sessao.nome + ' (' + sessao.papel + ')',
+      DataCancelamento: nowIso_(), MotivoCancelamento: just
+    });
     invalidarCacheObras_();
+    cacheRemover_('pub_obra_' + idObra);
     return { ok: true };
   } finally {
     lock.releaseLock();
@@ -256,22 +252,21 @@ function apiDecidirPrazo(token, idObra, tipoDecisao, novoPrazo, justificativa) {
     if (!obra) throw new Error('Obra não encontrada.');
     const prazoAnterior = obra.PrazoManifestacao;
     let prazoNovo = '';
-    const sh = ss_().getSheetByName(SHEETS.OBRAS);
-    const col = (h) => OBRAS_HEADERS.indexOf(h) + 1;
     if (tipoDecisao === 'Estender') {
       prazoNovo = sanitize_(novoPrazo, 20);
       if (!prazoNovo) throw new Error('Informe a nova data de prazo.');
-      sh.getRange(obra._row, col('PrazoManifestacao')).setValue(prazoNovo);
+      atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, obra._row, { PrazoManifestacao: prazoNovo });
     } else {
-      sh.getRange(obra._row, col('Status')).setValue('Manifestação encerrada');
+      atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, obra._row, { Status: 'Manifestação encerrada' });
     }
     const doObra = readAll_(SHEETS.DECISOES_PRAZO, DECISOES_PRAZO_HEADERS).filter(d => d.IDObra === idObra).length;
-    const decId = idObra + '-DP' + ('00' + (doObra + 1)).slice(-2);
+    const decId = idObra + '-DP' + largura_(doObra + 1, 2);
     // decisão agora tem autoria nominal (sessão individual)
     ensureSheet_(ss_(), SHEETS.DECISOES_PRAZO, DECISOES_PRAZO_HEADERS).appendRow([
       decId, idObra, tipoDecisao, prazoAnterior, prazoNovo, just, sessao.nome + ' (' + sessao.papel + ')', nowIso_()
     ]);
     invalidarCacheObras_();
+    cacheRemover_('pub_obra_' + idObra);
     return { ok: true };
   } finally {
     lock.releaseLock();
@@ -280,13 +275,23 @@ function apiDecidirPrazo(token, idObra, tipoDecisao, novoPrazo, justificativa) {
 
 // ────────────────────────────────────────────── PÚBLICA ──
 
+// Só estes campos da obra saem na página pública (?obra=). O resto
+// (observações do PMO, cancelamento, vínculo com pedido, status do
+// cronograma) é interno.
+const CAMPOS_OBRA_PUBLICA = [
+  'ID', 'Titulo', 'Descricao', 'Justificativa', 'OrigemDemanda', 'Setor', 'AreasAdjacentes', 'LinkPlanta',
+  'DataInicio', 'DataFim', 'PrazoManifestacao', 'RestricoesCalendario',
+  'ResponsavelNome', 'ResponsavelCargo', 'ResponsavelContato', 'Execucao', 'EmpresaContratada',
+  'Impactos', 'DetalhamentoImpactos', 'HorarioTrabalho', 'ValorEstimado', 'FonteRecurso',
+  'Status', 'DataPublicacao'
+];
+
 function apiGetObraPublica(id) {
   // pico de acesso acontece logo após a publicação no grupo — 30s de cache
   // seguram a planilha; erros nunca são cacheados (throw antes do put)
-  const cache = CacheService.getScriptCache();
   const cacheKey = 'pub_obra_' + id;
-  const hit = cache.get(cacheKey);
-  if (hit) return JSON.parse(hit);
+  const hit = cacheLer_(cacheKey);
+  if (hit) return hit;
 
   const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === id);
   if (!obra || obra.Status === 'Rascunho') {
@@ -300,7 +305,7 @@ function apiGetObraPublica(id) {
   const manifs = readAll_(SHEETS.MANIF, MANIF_HEADERS).filter(m => m.IDObra === id);
 
   const pub = {};
-  OBRAS_HEADERS.forEach(h => pub[h] = obra[h]);
+  CAMPOS_OBRA_PUBLICA.forEach(h => pub[h] = obra[h]);
   if (String(cfg.MOSTRAR_VALOR_PUBLICO).toUpperCase() !== 'SIM') {
     pub.ValorEstimado = '';
   }
@@ -313,7 +318,7 @@ function apiGetObraPublica(id) {
     areasQueSePosicionaram: uniq_(manifs.map(m => m.Area)),
     instituicao: cfg.NOME_INSTITUICAO || 'Hospital da Baleia'
   };
-  cache.put(cacheKey, JSON.stringify(resp), 30);
+  cacheGravar_(cacheKey, resp, 30);
   return resp;
 }
 
@@ -351,8 +356,8 @@ function apiManifestar(id, dados) {
     const extemporanea = prazoExpirado_(obra.PrazoManifestacao) || obra.Status === 'Manifestação encerrada';
 
     const sh = ss_().getSheetByName(SHEETS.MANIF);
-    const idManif = id + '-M' + ('000' + (readAll_(SHEETS.MANIF, MANIF_HEADERS)
-      .filter(m => m.IDObra === id).length + 1)).slice(-3);
+    const idManif = id + '-M' + largura_(readAll_(SHEETS.MANIF, MANIF_HEADERS)
+      .filter(m => m.IDObra === id).length + 1, 3);
 
     sh.appendRow([
       idManif, id, nowIso_(), nome, cargo, area, pos,
@@ -361,7 +366,7 @@ function apiManifestar(id, dados) {
       sanitize_(dados.ItensEAP, 500),
       extemporanea ? 'SIM' : 'NÃO'
     ]);
-    CacheService.getScriptCache().remove('pub_obra_' + id);
+    cacheRemover_('pub_obra_' + id);
     invalidarCacheObras_();
 
     return { ok: true, extemporanea: extemporanea };
@@ -390,7 +395,7 @@ function proporArea_(nome, propostoPor, cargoPropoente, idObraOrigem) {
 
 // Qualquer papel logado vê a fila (PMO decide; Engenharia acompanha).
 function apiListarAreasPropostas(token) {
-  validarToken_(token);
+  exigirEquipe_(token);
   return readAll_(SHEETS.AREAS_PROP, AREAS_PROP_HEADERS)
     .filter(a => a.Status === 'Pendente')
     .reverse();
@@ -398,18 +403,15 @@ function apiListarAreasPropostas(token) {
 
 function apiDecidirAreaProposta(token, id, aprovar, observacoes) {
   exigirPMO_(token);
-  const prop = readAll_(SHEETS.AREAS_PROP, AREAS_PROP_HEADERS).find(a => a.ID === id);
-  if (!prop) throw new Error('Proposta não encontrada: ' + id);
-  if (prop.Status !== 'Pendente') throw new Error('Esta proposta já foi decidida.');
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    const sh = ss_().getSheetByName(SHEETS.AREAS_PROP);
-    const col = (h) => AREAS_PROP_HEADERS.indexOf(h) + 1;
-    const novoStatus = aprovar ? 'Aprovada' : 'Rejeitada';
-    sh.getRange(prop._row, col('Status')).setValue(novoStatus);
-    sh.getRange(prop._row, col('ObservacoesPMO')).setValue(sanitize_(observacoes, 1000));
-    sh.getRange(prop._row, col('DecididoEm')).setValue(nowIso_());
+    const prop = readAll_(SHEETS.AREAS_PROP, AREAS_PROP_HEADERS).find(a => a.ID === id);
+    if (!prop) throw new Error('Proposta não encontrada: ' + id);
+    if (prop.Status !== 'Pendente') throw new Error('Esta proposta já foi decidida.');
+    atualizarCampos_(SHEETS.AREAS_PROP, AREAS_PROP_HEADERS, prop._row, {
+      Status: aprovar ? 'Aprovada' : 'Rejeitada', ObservacoesPMO: sanitize_(observacoes, 1000), DecididoEm: nowIso_()
+    });
     if (aprovar) {
       const cfgSheet = ss_().getSheetByName(SHEETS.CONFIG);
       const areasAtuais = getConfig_()._areas;
@@ -427,26 +429,28 @@ function apiDecidirAreaProposta(token, id, aprovar, observacoes) {
 
 function apiCriarAta(token, idObra, dataReuniao, participantes, resumo) {
   const sessao = exigirPapel_(token, ['Engenharia', 'PMO']);
-  const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
-  if (!obra) throw new Error('Obra não encontrada.');
   const data = sanitize_(dataReuniao, 20);
   const part = sanitize_(participantes, 2000);
   const res = sanitize_(resumo, 5000);
   if (!data) throw new Error('Informe a data da reunião.');
   if (!part) throw new Error('Registre os participantes da reunião.');
   if (!res) throw new Error('Registre o resumo da reunião.');
-  const doObra = readAll_(SHEETS.ATAS, ATAS_HEADERS).filter(a => a.IDObra === idObra).length;
-  const id = idObra + '-AT' + ('00' + (doObra + 1)).slice(-2);
-  ensureSheet_(ss_(), SHEETS.ATAS, ATAS_HEADERS).appendRow([
-    id, idObra, 'Pull Planning', data, part, res, sessao.nome, nowIso_()
-  ]);
-  return { ok: true, id: id };
+  return comLock_(() => {
+    const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
+    if (!obra) throw new Error('Obra não encontrada.');
+    const doObra = readAll_(SHEETS.ATAS, ATAS_HEADERS).filter(a => a.IDObra === idObra).length;
+    const id = idObra + '-AT' + largura_(doObra + 1, 2);
+    ensureSheet_(ss_(), SHEETS.ATAS, ATAS_HEADERS).appendRow([
+      id, idObra, 'Pull Planning', data, part, res, sessao.nome, nowIso_()
+    ]);
+    return { ok: true, id: id };
+  });
 }
 
 // ────────────────────────────────────────────── REQUISITOS ──
 
 function apiCriarRequisito(token, idObra, idManif, descricao, responsavel) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const desc = sanitize_(descricao, 3000);
   if (!desc) throw new Error('Descrição do requisito vazia.');
   const lock = LockService.getScriptLock();
@@ -460,7 +464,7 @@ function apiCriarRequisito(token, idObra, idManif, descricao, responsavel) {
       throw new Error('Esta manifestação já tem um requisito rastreado.');
     }
     const doObra = existentes.filter(r => r.IDObra === idObra).length;
-    const id = idObra + '-R' + ('00' + (doObra + 1)).slice(-2);
+    const id = idObra + '-R' + largura_(doObra + 1, 2);
     ensureSheet_(ss_(), SHEETS.REQUISITOS, REQUISITOS_HEADERS).appendRow([
       id, idObra, manifId, desc,
       sanitize_(responsavel, 120),
@@ -473,17 +477,19 @@ function apiCriarRequisito(token, idObra, idManif, descricao, responsavel) {
 }
 
 function apiAtualizarRequisito(token, idRequisito, novoStatus, observacoes) {
-  validarToken_(token);
+  exigirEquipe_(token);
   if (REQUISITO_STATUS.indexOf(novoStatus) < 0) throw new Error('Status de requisito inválido.');
-  const req = readAll_(SHEETS.REQUISITOS, REQUISITOS_HEADERS).find(r => r.ID === idRequisito);
-  if (!req) throw new Error('Requisito não encontrado: ' + idRequisito);
-  const sh = ss_().getSheetByName(SHEETS.REQUISITOS);
-  const col = (h) => REQUISITOS_HEADERS.indexOf(h) + 1;
-  sh.getRange(req._row, col('Status')).setValue(novoStatus);
-  sh.getRange(req._row, col('DataResolucao')).setValue(novoStatus === 'Pendente' ? '' : nowIso_());
-  if (observacoes != null && sanitize_(observacoes, 2000)) {
-    sh.getRange(req._row, col('Observacoes')).setValue(sanitize_(observacoes, 2000));
-  }
-  sh.getRange(req._row, col('AtualizadoEm')).setValue(nowIso_());
-  return { ok: true };
+  return comLock_(() => {
+    const req = readAll_(SHEETS.REQUISITOS, REQUISITOS_HEADERS).find(r => r.ID === idRequisito);
+    if (!req) throw new Error('Requisito não encontrado: ' + idRequisito);
+    const campos = {
+      Status: novoStatus,
+      DataResolucao: novoStatus === 'Pendente' ? '' : nowIso_(),
+      AtualizadoEm: nowIso_()
+    };
+    const obs = observacoes != null ? sanitize_(observacoes, 2000) : '';
+    if (obs) campos.Observacoes = obs;
+    atualizarCampos_(SHEETS.REQUISITOS, REQUISITOS_HEADERS, req._row, campos);
+    return { ok: true };
+  });
 }

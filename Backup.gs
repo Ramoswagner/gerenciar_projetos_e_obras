@@ -6,7 +6,8 @@
 // com mais de 90 dias. Executada pelo trigger semanal (ver
 // instalarTriggerBackup) ou manualmente pelo editor.
 function backupSemanal() {
-  const ss = SpreadsheetApp.getActive();
+  somenteEditor_();
+  const ss = ss_();
   const arquivo = DriveApp.getFileById(ss.getId());
   const pais = arquivo.getParents();
   const pasta = pais.hasNext() ? pais.next() : DriveApp.getRootFolder();
@@ -33,6 +34,7 @@ function backupSemanal() {
 // Rodar UMA vez manualmente pelo editor após o deploy. Substitui trigger
 // anterior se já existir, então é seguro rodar de novo.
 function instalarTriggerBackup() {
+  somenteEditor_();
   ScriptApp.getProjectTriggers()
     .filter(t => t.getHandlerFunction() === 'backupSemanal')
     .forEach(t => ScriptApp.deleteTrigger(t));

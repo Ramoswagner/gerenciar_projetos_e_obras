@@ -298,7 +298,8 @@ const ENCERRAMENTO_ASSINATURAS_HEADERS = [
 // ────────────────────────────────────────────── SETUP ──
 
 function setup() {
-  const ss = SpreadsheetApp.getActive();
+  somenteEditor_();
+  const ss = ss_();
 
   ensureSheet_(ss, SHEETS.OBRAS, OBRAS_HEADERS);
   ensureSheet_(ss, SHEETS.EAP, EAP_HEADERS);
@@ -383,7 +384,7 @@ function setup() {
   const medicoes = ss.getSheetByName(SHEETS.MEDICOES);
   if (medicoes) medicoes.getRange('E2:E').setNumberFormat('0.00');
 
-  return 'Setup concluído. Abas: ' + Object.keys(SHEETS).length + '. Login agora é por Usuarios (ver Auth.gs) — rode semearPrimeiroPmo_ no editor (Usuarios.gs) se esta for uma planilha nova.';
+  return 'Setup concluído. Abas: ' + Object.keys(SHEETS).length + '. Login agora é por Usuarios (ver Auth.gs) — rode semearPrimeiroPmo no editor (Usuarios.gs) se esta for uma planilha nova.';
 }
 
 function ensureSheet_(ss, name, headers) {
@@ -461,7 +462,7 @@ function migrarCronogramaParaEtapas_(ss, shAntiga, headerAntigo) {
     const chave = idObra + '|' + textoEtapa;
     if (!etapaPorChave[chave]) {
       ordemEtapaPorObra[idObra] = ordemEtapaPorObra[idObra] || 0;
-      const idEtapa = idObra + '-ET' + ('00' + (ordemEtapaPorObra[idObra] + 1)).slice(-2);
+      const idEtapa = idObra + '-ET' + largura_(ordemEtapaPorObra[idObra] + 1, 2);
       etapasNovasRows.push([idEtapa, idObra, textoEtapa, ordemEtapaPorObra[idObra], nowIso_()]);
       etapaPorChave[chave] = idEtapa;
       ordemEtapaPorObra[idObra]++;

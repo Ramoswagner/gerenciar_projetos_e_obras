@@ -41,12 +41,13 @@ function criarTokenDireto_(usuarioId) {
   const usuario = readAll_(SHEETS.USUARIOS, USUARIOS_HEADERS).find(u => u.ID === usuarioId);
   if (!usuario) throw new Error('Usuário não encontrado: ' + usuarioId);
   const token = Utilities.getUuid();
-  const payload = { usuarioId: usuario.ID, nome: usuario.Nome, email: usuario.Email, cargo: usuario.Cargo, papel: usuario.Papel };
+  const payload = { usuarioId: usuario.ID, nome: usuario.Nome, email: usuario.Email, cargo: usuario.Cargo, papel: usuario.Papel, v: versaoSessao_(usuario.ID) };
   CacheService.getScriptCache().put(SESSAO_CACHE_PREFIXO + token, JSON.stringify(payload), SESSAO_TTL_SEG);
   return token;
 }
 
 function criarProjetosExemplo() {
+  somenteEditor_();
   const pmo = readAll_(SHEETS.USUARIOS, USUARIOS_HEADERS).find(u => u.Papel === 'PMO' && u.Status === 'ativo');
   if (!pmo) throw new Error('Nenhum usuário PMO ativo encontrado — rode semearPrimeiroPmo() antes.');
   const token = criarTokenDireto_(pmo.ID);

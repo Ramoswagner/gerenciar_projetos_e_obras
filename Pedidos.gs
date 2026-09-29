@@ -71,7 +71,7 @@ function appendHistorico_(idPedido, autor, texto, linkEvidencia) {
   const sh = ensureSheet_(ss_(), SHEETS.PEDIDO_HIST, PEDIDO_HIST_HEADERS);
   const n = readAll_(SHEETS.PEDIDO_HIST, PEDIDO_HIST_HEADERS)
     .filter(h => h.IDPedido === idPedido).length;
-  const id = idPedido + '-H' + ('00' + (n + 1)).slice(-2);
+  const id = idPedido + '-H' + largura_(n + 1, 2);
   sh.appendRow([id, idPedido, autor, texto, linkEvidencia || '', nowIso_()]);
   return id;
 }
@@ -104,12 +104,9 @@ function apiResponderPedido(id, token, texto, linkEvidencia) {
     }
 
     appendHistorico_(id, 'Solicitante', txt, link);
-    const sh = ss_().getSheetByName(SHEETS.PEDIDOS);
-    const col = (h) => PEDIDOS_HEADERS.indexOf(h) + 1;
-    sh.getRange(pedido._row, col('Status')).setValue('Em análise');
-    sh.getRange(pedido._row, col('AtualizadoEm')).setValue(nowIso_());
+    atualizarCampos_(SHEETS.PEDIDOS, PEDIDOS_HEADERS, pedido._row, { Status: 'Em análise', AtualizadoEm: nowIso_() });
     // invalida o cache público para o re-render já mostrar o novo status
-    CacheService.getScriptCache().remove('pub_ped_' + id + '_' + token);
+    cacheRemover_('pub_ped_' + id + '_' + token);
     invalidarCachePedidos_();
     return { ok: true };
   } finally {
@@ -133,15 +130,12 @@ function apiCancelarPedido(id, token, motivo) {
       throw new Error('Este pedido não pode mais ser cancelado (status atual: ' + pedido.Status + ').');
     }
     const just = sanitize_(motivo, 1000);
-    const sh = ss_().getSheetByName(SHEETS.PEDIDOS);
-    const col = (h) => PEDIDOS_HEADERS.indexOf(h) + 1;
-    sh.getRange(pedido._row, col('Status')).setValue('Cancelado');
-    sh.getRange(pedido._row, col('CanceladoPor')).setValue(pedido.Nome);
-    sh.getRange(pedido._row, col('DataCancelamento')).setValue(nowIso_());
-    sh.getRange(pedido._row, col('MotivoCancelamento')).setValue(just);
-    sh.getRange(pedido._row, col('AtualizadoEm')).setValue(nowIso_());
+    atualizarCampos_(SHEETS.PEDIDOS, PEDIDOS_HEADERS, pedido._row, {
+      Status: 'Cancelado', AtualizadoEm: nowIso_(),
+      CanceladoPor: pedido.Nome, DataCancelamento: nowIso_(), MotivoCancelamento: just
+    });
     appendHistorico_(id, 'Solicitante', 'Pedido cancelado pelo solicitante.' + (just ? ' Motivo: ' + just : ''), '');
-    CacheService.getScriptCache().remove('pub_ped_' + id + '_' + token);
+    cacheRemover_('pub_ped_' + id + '_' + token);
     invalidarCachePedidos_();
     return { ok: true };
   } finally {
@@ -151,10 +145,9 @@ function apiCancelarPedido(id, token, motivo) {
 
 function apiGetPedidoStatus(id, token) {
   // token na chave: só respostas de token válido chegam ao put (erro faz throw antes)
-  const cache = CacheService.getScriptCache();
   const cacheKey = 'pub_ped_' + id + '_' + token;
-  const hit = cache.get(cacheKey);
-  if (hit) return JSON.parse(hit);
+  const hit = cacheLer_(cacheKey);
+  if (hit) return hit;
 
   const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
   if (!pedido || !token || pedido.Token !== token) {
@@ -171,7 +164,7 @@ function apiGetPedidoStatus(id, token) {
     CriadoEm: pedido.CriadoEm, AtualizadoEm: pedido.AtualizadoEm,
     historico: historicoDoPedido_(id)
   };
-  cache.put(cacheKey, JSON.stringify(resp), 30);
+  cacheGravar_(cacheKey, resp, 30);
   return resp;
 }
 
@@ -181,14 +174,13 @@ function apiGetPedidoStatus(id, token) {
 // "Pedidos" repetidas vezes não relê a planilha inteira a cada vez.
 const CACHE_LISTA_PEDIDOS = 'admin_pedidos_lista_v1';
 function invalidarCachePedidos_() {
-  CacheService.getScriptCache().remove(CACHE_LISTA_PEDIDOS);
+  cacheRemover_(CACHE_LISTA_PEDIDOS);
 }
 
 function apiListarPedidos(token) {
-  validarToken_(token);
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get(CACHE_LISTA_PEDIDOS);
-  if (hit) return JSON.parse(hit);
+  exigirEquipe_(token);
+  const hit = cacheLer_(CACHE_LISTA_PEDIDOS);
+  if (hit) return hit;
   const lista = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS)
     .map(p => ({
       ID: p.ID, Nome: p.Nome, Cargo: p.Cargo, Area: p.Area, SetorDesejado: p.SetorDesejado,
@@ -196,12 +188,12 @@ function apiListarPedidos(token) {
       Finalidade: String(p.FinalidadeObjetivo || '').slice(0, 200)
     }))
     .reverse();
-  cache.put(CACHE_LISTA_PEDIDOS, JSON.stringify(lista), 120);
+  cacheGravar_(CACHE_LISTA_PEDIDOS, lista, 120);
   return lista;
 }
 
 function apiGetPedidoAdmin(token, id) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
   if (!pedido) throw new Error('Pedido não encontrado: ' + id);
   return {
@@ -212,30 +204,32 @@ function apiGetPedidoAdmin(token, id) {
 }
 
 function apiLinkNovoPedido(token) {
-  validarToken_(token);
+  exigirEquipe_(token);
   return { link: linkNovoPedido_() };
 }
 
 function apiAtualizarStatusPedido(token, id, novoStatus, observacoes) {
-  const sessao = validarToken_(token);
+  exigirEquipe_(token);
   // 'Cancelado' fica fora deste endpoint de propósito — cancelamento tem
   // fluxo próprio com justificativa obrigatória (Fase 5), mesmo princípio
   // que já isola 'Manifestação encerrada' em Obras.
   const permitidos = ['Novo', 'Em análise', 'Aguardando mais informações', 'Aceito', 'Recusado'];
   if (permitidos.indexOf(novoStatus) < 0) throw new Error('Status inválido.');
-  const sh = ss_().getSheetByName(SHEETS.PEDIDOS);
-  const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
-  if (!pedido) throw new Error('Pedido não encontrado.');
-  const col = (h) => PEDIDOS_HEADERS.indexOf(h) + 1;
   const obs = sanitize_(observacoes, 2000);
-  sh.getRange(pedido._row, col('Status')).setValue(novoStatus);
-  sh.getRange(pedido._row, col('ObservacoesEngenharia')).setValue(obs);
-  sh.getRange(pedido._row, col('AtualizadoEm')).setValue(nowIso_());
-  // Autor agora é nominal (sessão individual), não mais o papel genérico —
-  // primeiro ganho concreto do login por pessoa.
-  if (obs) appendHistorico_(id, 'Engenharia', obs, '');
+  const pedido = comLock_(() => {
+    const p = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(x => x.ID === id);
+    if (!p) throw new Error('Pedido não encontrado.');
+    if (p.Status === 'Cancelado') throw new Error('Pedido cancelado pelo solicitante não muda mais de status.');
+    atualizarCampos_(SHEETS.PEDIDOS, PEDIDOS_HEADERS, p._row, {
+      Status: novoStatus, ObservacoesEngenharia: obs, AtualizadoEm: nowIso_()
+    });
+    // Autor agora é nominal (sessão individual), não mais o papel genérico —
+    // primeiro ganho concreto do login por pessoa.
+    if (obs) appendHistorico_(id, 'Engenharia', obs, '');
+    return p;
+  });
   // invalida o cache público para o solicitante ver o novo status sem esperar o TTL
-  CacheService.getScriptCache().remove('pub_ped_' + id + '_' + pedido.Token);
+  cacheRemover_('pub_ped_' + id + '_' + pedido.Token);
   invalidarCachePedidos_();
   return { ok: true };
 }
@@ -244,7 +238,7 @@ function apiAtualizarStatusPedido(token, id, novoStatus, observacoes) {
 // pedido aceito. Não cria a obra sozinho — devolve os dados para o admin
 // revisar/completar (EAP, datas, impactos) antes de salvar de fato.
 function apiPedidoParaObraContexto(token, id) {
-  validarToken_(token);
+  exigirEquipe_(token);
   const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === id);
   if (!pedido) throw new Error('Pedido não encontrado.');
 
@@ -269,14 +263,15 @@ function apiPedidoParaObraContexto(token, id) {
 // Vincula definitivamente um pedido à obra que foi criada a partir dele —
 // chamado depois que o admin salva a Nova Obra pré-preenchida.
 function apiVincularPedidoObra(token, idPedido, idObra) {
-  validarToken_(token);
-  const sh = ss_().getSheetByName(SHEETS.PEDIDOS);
-  const pedido = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(p => p.ID === idPedido);
-  if (!pedido) throw new Error('Pedido não encontrado.');
-  const col = (h) => PEDIDOS_HEADERS.indexOf(h) + 1;
-  sh.getRange(pedido._row, col('Status')).setValue('Aceito');
-  sh.getRange(pedido._row, col('IDObraGerada')).setValue(idObra);
-  sh.getRange(pedido._row, col('AtualizadoEm')).setValue(nowIso_());
+  exigirEquipe_(token);
+  const pedido = comLock_(() => {
+    const p = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS).find(x => x.ID === idPedido);
+    if (!p) throw new Error('Pedido não encontrado.');
+    if (!readAll_(SHEETS.OBRAS, OBRAS_HEADERS).some(o => o.ID === idObra)) throw new Error('Obra não encontrada: ' + idObra);
+    atualizarCampos_(SHEETS.PEDIDOS, PEDIDOS_HEADERS, p._row, { Status: 'Aceito', IDObraGerada: idObra, AtualizadoEm: nowIso_() });
+    return p;
+  });
+  cacheRemover_('pub_ped_' + idPedido + '_' + pedido.Token);
   invalidarCachePedidos_();
   return { ok: true };
 }

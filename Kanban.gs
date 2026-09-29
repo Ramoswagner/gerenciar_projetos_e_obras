@@ -45,10 +45,9 @@ function kanbanBucketObra_(obra) {
 const CACHE_KANBAN = 'admin_kanban_v1';
 
 function apiKanban(token) {
-  validarToken_(token);
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get(CACHE_KANBAN);
-  if (hit) return JSON.parse(hit);
+  exigirEquipe_(token);
+  const hit = cacheLer_(CACHE_KANBAN);
+  if (hit) return hit;
 
   const pedidos = readAll_(SHEETS.PEDIDOS, PEDIDOS_HEADERS)
     .map(p => {
@@ -86,6 +85,6 @@ function apiKanban(token) {
   });
 
   const resultado = { pedidos: pedidos, obras: obras };
-  cache.put(CACHE_KANBAN, JSON.stringify(resultado), 120);
+  cacheGravar_(CACHE_KANBAN, resultado, 120);
   return resultado;
 }

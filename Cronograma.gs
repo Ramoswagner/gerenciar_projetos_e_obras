@@ -21,14 +21,10 @@
 // nunca pode ficar um "Validado" desatualizado silenciosamente.
 function apiSalvarCronograma(token, idObra, etapas, pacotes, enviarParaValidacao) {
   exigirPapel_(token, ['Engenharia', 'PMO']);
-  const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
-  if (!obra) throw new Error('Obra não encontrada.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  const resultado = comLock_(() => {
+    const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
+    if (!obra) throw new Error('Obra não encontrada.');
     salvarEtapasPacotes_(idObra, etapas || [], pacotes || []);
-    const sh = ss_().getSheetByName(SHEETS.OBRAS);
-    const col = (h) => OBRAS_HEADERS.indexOf(h) + 1;
     const statusAtual = obra.StatusCronograma || 'Rascunho';
     let novoStatus = statusAtual;
     if (statusAtual === 'Validado') {
@@ -36,12 +32,13 @@ function apiSalvarCronograma(token, idObra, etapas, pacotes, enviarParaValidacao
     } else if (enviarParaValidacao) {
       novoStatus = 'Aguardando validação';
     }
-    if (novoStatus !== statusAtual) sh.getRange(obra._row, col('StatusCronograma')).setValue(novoStatus);
-    invalidarCacheObras_();
+    if (novoStatus !== statusAtual) {
+      atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, obra._row, { StatusCronograma: novoStatus });
+    }
     return { ok: true, statusCronograma: novoStatus };
-  } finally {
-    lock.releaseLock();
-  }
+  });
+  invalidarCacheObras_();
+  return resultado;
 }
 
 // Fase 7: CustoDoacao/CustoProprio viram número de verdade (antes era
@@ -56,17 +53,14 @@ function parseCustoValidado_(v, rotulo, nomeAtividade) {
   return n;
 }
 
-// Reescreve Etapas e Cronograma em lote, preservando IDs existentes
+// Grava Etapas e Pacotes de UMA obra, preservando IDs existentes
 // (Predecessora referencia IDs de pacotes; ordem recontada da posição).
+// Só as linhas dessa obra são escritas: as das outras obras não são lidas
+// de volta nem regravadas (ver substituirLinhasDe_).
 function salvarEtapasPacotes_(idObra, etapas, pacotes) {
-  const shEtapas = ensureSheet_(ss_(), SHEETS.ETAPAS, ETAPAS_HEADERS);
-  const shCron = ensureSheet_(ss_(), SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS);
-
   const etapasExistentesMap = {};
-  const todasEtapasAtuais = readAll_(SHEETS.ETAPAS, ETAPAS_HEADERS);
-  todasEtapasAtuais.filter(e => e.IDObra === idObra).forEach(e => { etapasExistentesMap[e.ID] = e; });
-  const etapasOutrasObras = todasEtapasAtuais.filter(e => e.IDObra !== idObra)
-    .map(e => ETAPAS_HEADERS.map(h => e[h]));
+  readAll_(SHEETS.ETAPAS, ETAPAS_HEADERS)
+    .filter(e => e.IDObra === idObra).forEach(e => { etapasExistentesMap[e.ID] = e; });
 
   let maiorNumEtapa = 0;
   Object.keys(etapasExistentesMap).forEach(id => {
@@ -79,7 +73,7 @@ function salvarEtapasPacotes_(idObra, etapas, pacotes) {
     const idInformado = sanitize_(e.ID, 30);
     if (idInformado && etapasExistentesMap[idInformado]) return idInformado;
     maiorNumEtapa++;
-    return idObra + '-ET' + ('00' + maiorNumEtapa).slice(-2);
+    return idObra + '-ET' + largura_(maiorNumEtapa, 2);
   });
   // Blindagem contra duplicidade: se o array recebido do cliente trouxer
   // o MESMO ID final em mais de uma posição (não deveria acontecer com o
@@ -102,10 +96,8 @@ function salvarEtapasPacotes_(idObra, etapas, pacotes) {
   });
 
   const pacotesExistentesMap = {};
-  const todosPacotesAtuais = readAll_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS);
-  todosPacotesAtuais.filter(c => c.IDObra === idObra).forEach(c => { pacotesExistentesMap[c.ID] = c; });
-  const pacotesOutrasObras = todosPacotesAtuais.filter(c => c.IDObra !== idObra)
-    .map(c => CRONOGRAMA_HEADERS.map(h => c[h]));
+  readAll_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS)
+    .filter(c => c.IDObra === idObra).forEach(c => { pacotesExistentesMap[c.ID] = c; });
 
   let maiorNumPacote = 0;
   Object.keys(pacotesExistentesMap).forEach(id => {
@@ -118,7 +110,7 @@ function salvarEtapasPacotes_(idObra, etapas, pacotes) {
     const idInformado = sanitize_(p.ID, 30);
     if (idInformado && pacotesExistentesMap[idInformado]) return idInformado;
     maiorNumPacote++;
-    return idObra + '-C' + ('00' + maiorNumPacote).slice(-2);
+    return idObra + '-C' + largura_(maiorNumPacote, 2);
   });
 
   // TemRisco nunca mais é confiado do cliente — é derivado de quantos
@@ -171,15 +163,8 @@ function salvarEtapasPacotes_(idObra, etapas, pacotes) {
     return linha;
   });
 
-  const todasEtapas = etapasOutrasObras.concat(etapasNovasRows);
-  const lastEtapas = shEtapas.getLastRow();
-  if (lastEtapas > 1) shEtapas.getRange(2, 1, lastEtapas - 1, ETAPAS_HEADERS.length).clearContent();
-  if (todasEtapas.length) shEtapas.getRange(2, 1, todasEtapas.length, ETAPAS_HEADERS.length).setValues(todasEtapas);
-
-  const todosPacotes = pacotesOutrasObras.concat(pacotesNovasRows);
-  const lastCron = shCron.getLastRow();
-  if (lastCron > 1) shCron.getRange(2, 1, lastCron - 1, CRONOGRAMA_HEADERS.length).clearContent();
-  if (todosPacotes.length) shCron.getRange(2, 1, todosPacotes.length, CRONOGRAMA_HEADERS.length).setValues(todosPacotes);
+  substituirLinhasDe_(SHEETS.ETAPAS, ETAPAS_HEADERS, 'IDObra', idObra, etapasNovasRows);
+  substituirLinhasDe_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS, 'IDObra', idObra, pacotesNovasRows);
 }
 
 // ────────────────────────────────────────────── DIAGNÓSTICO (rodar no editor) ──
@@ -188,6 +173,7 @@ function salvarEtapasPacotes_(idObra, etapas, pacotes) {
 // espera (CRONOGRAMA_HEADERS), e as 3 primeiras linhas de dados, coluna a
 // coluna. Usar pra investigar qualquer suspeita de campo fora de lugar.
 function diagnosticarCronograma() {
+  somenteEditor_();
   const sh = ss_().getSheetByName(SHEETS.CRONOGRAMA);
   const shEt = ss_().getSheetByName(SHEETS.ETAPAS);
   if (!sh) { Logger.log('Aba Cronograma não existe.'); return; }
@@ -227,18 +213,19 @@ function diagnosticarCronograma() {
 
 function apiValidarCronograma(token, idObra, aprovado, observacoes) {
   const sessao = exigirPMO_(token);
-  const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
-  if (!obra) throw new Error('Obra não encontrada.');
-  const cron = readAll_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS).filter(c => c.IDObra === idObra);
-  if (!cron.length) throw new Error('Não há cronograma cadastrado para validar.');
-  const sh = ss_().getSheetByName(SHEETS.OBRAS);
-  const col = (h) => OBRAS_HEADERS.indexOf(h) + 1;
-  const novoStatus = aprovado ? 'Validado' : 'Revisão solicitada';
-  sh.getRange(obra._row, col('StatusCronograma')).setValue(novoStatus);
-  sh.getRange(obra._row, col('CronogramaValidadoPor')).setValue(sessao.nome + ' (PMO)');
-  sh.getRange(obra._row, col('CronogramaValidadoEm')).setValue(nowIso_());
-  sh.getRange(obra._row, col('CronogramaObservacoesPMO')).setValue(sanitize_(observacoes, 2000));
-  if (aprovado) congelarBaseline_(idObra); // idempotente — só age na 1ª validação, nunca sobrescreve depois
+  comLock_(() => {
+    const obra = readAll_(SHEETS.OBRAS, OBRAS_HEADERS).find(o => o.ID === idObra);
+    if (!obra) throw new Error('Obra não encontrada.');
+    const cron = readAll_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS).filter(c => c.IDObra === idObra);
+    if (!cron.length) throw new Error('Não há cronograma cadastrado para validar.');
+    atualizarCampos_(SHEETS.OBRAS, OBRAS_HEADERS, obra._row, {
+      StatusCronograma: aprovado ? 'Validado' : 'Revisão solicitada',
+      CronogramaValidadoPor: sessao.nome + ' (PMO)',
+      CronogramaValidadoEm: nowIso_(),
+      CronogramaObservacoesPMO: sanitize_(observacoes, 2000)
+    });
+    if (aprovado) congelarBaseline_(idObra); // idempotente — só age na 1ª validação, nunca sobrescreve depois
+  });
   invalidarCacheObras_();
   return { ok: true };
 }
@@ -253,6 +240,7 @@ function apiValidarCronograma(token, idObra, aprovado, observacoes) {
 // antigo até alguém arrumar. Sem underscore no nome de propósito — senão
 // não aparece no seletor "Executar" do editor (armadilha já documentada).
 function migrarCustoParaNumero() {
+  somenteEditor_();
   const sh = ss_().getSheetByName(SHEETS.CRONOGRAMA);
   if (!sh) return 'Aba Cronograma não existe — nada para migrar.';
   const lastRow = sh.getLastRow();

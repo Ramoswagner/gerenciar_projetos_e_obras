@@ -38,10 +38,7 @@ function apiCheckoffPacote(token, idPacote, novoStatus) {
     if (pacote.ResponsavelUserId !== sessao.usuarioId) {
       throw new Error('Você não é o responsável designado para este pacote.');
     }
-    const sh = ss_().getSheetByName(SHEETS.CRONOGRAMA);
-    const col = (h) => CRONOGRAMA_HEADERS.indexOf(h) + 1;
-    sh.getRange(pacote._row, col('Status')).setValue(novoStatus);
-    sh.getRange(pacote._row, col('AtualizadoEm')).setValue(nowIso_());
+    atualizarCampos_(SHEETS.CRONOGRAMA, CRONOGRAMA_HEADERS, pacote._row, { Status: novoStatus, AtualizadoEm: nowIso_() });
     return { ok: true };
   } finally {
     lock.releaseLock();

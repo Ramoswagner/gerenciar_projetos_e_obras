@@ -15,7 +15,7 @@
 // arquivos diferentes).
 const CACHE_LOOKAHEAD = 'admin_lookahead_v1';
 function invalidarCacheLookahead_() {
-  CacheService.getScriptCache().remove(CACHE_LOOKAHEAD);
+  cacheRemover_(CACHE_LOOKAHEAD);
 }
 
 function apiSalvarRestricao(token, dados) {
@@ -77,16 +77,12 @@ function apiMoverRestricao(token, idRestricao, novoStatus) {
   try {
     const restricao = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS).find(r => r.ID === idRestricao);
     if (!restricao) throw new Error('Restrição não encontrada.');
-    const sh = ss_().getSheetByName(SHEETS.RESTRICOES);
-    const col = (h) => RESTRICOES_HEADERS.indexOf(h) + 1;
-    sh.getRange(restricao._row, col('Status')).setValue(novoStatus);
-    if (novoStatus === 'Liberada') {
-      sh.getRange(restricao._row, col('LiberadoPor')).setValue(sessao.nome);
-      sh.getRange(restricao._row, col('LiberadoEm')).setValue(nowIso_());
-    } else {
-      sh.getRange(restricao._row, col('LiberadoPor')).setValue('');
-      sh.getRange(restricao._row, col('LiberadoEm')).setValue('');
-    }
+    const liberada = novoStatus === 'Liberada';
+    atualizarCampos_(SHEETS.RESTRICOES, RESTRICOES_HEADERS, restricao._row, {
+      Status: novoStatus,
+      LiberadoPor: liberada ? sessao.nome : '',
+      LiberadoEm: liberada ? nowIso_() : ''
+    });
     invalidarCacheLookahead_();
     return { ok: true };
   } finally {
@@ -168,7 +164,7 @@ function apiUploadEvidenciaRestricao(token, idRestricao, nomeArquivo, mimeType, 
 // edição do Lookahead, que não carrega o cronograma inteiro da obra (like
 // apiGetObraAdmin faz pra Cronograma.gs) só pra abrir 1 impedimento.
 function apiListarEvidenciasRestricao(token, idRestricao) {
-  validarToken_(token);
+  exigirEquipe_(token);
   return readAll_(SHEETS.RESTRICOES_EVIDENCIAS, RESTRICOES_EVIDENCIAS_HEADERS).filter(e => e.IDRestricao === idRestricao);
 }
 
@@ -227,10 +223,9 @@ function isoDoDate_(d) {
 }
 
 function apiLookahead(token) {
-  validarToken_(token);
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get(CACHE_LOOKAHEAD);
-  if (hit) return JSON.parse(hit);
+  exigirEquipe_(token);
+  const hit = cacheLer_(CACHE_LOOKAHEAD);
+  if (hit) return hit;
 
   const restricoes = readAll_(SHEETS.RESTRICOES, RESTRICOES_HEADERS);
   const obras = readAll_(SHEETS.OBRAS, OBRAS_HEADERS);
@@ -257,6 +252,6 @@ function apiLookahead(token) {
   const pctLiberado = naJanela.length ? Math.round(liberadasNaJanela / naJanela.length * 100) : null;
 
   const resultado = { restricoes: lista, semanas: semanas, pctLiberado: pctLiberado, totalNaJanela: naJanela.length };
-  cache.put(CACHE_LOOKAHEAD, JSON.stringify(resultado), 120);
+  cacheGravar_(CACHE_LOOKAHEAD, resultado, 120);
   return resultado;
 }

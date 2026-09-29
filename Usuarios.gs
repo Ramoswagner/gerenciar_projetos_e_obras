@@ -14,17 +14,17 @@ function apiListarUsuarios(token) {
 
 function apiSalvarUsuario(token, dados) {
   const sessao = exigirPMO_(token);
+  dados = dados || {};
   const nome = sanitize_(dados.Nome, 120);
   const email = normalizarEmail_(dados.Email);
   const cargo = sanitize_(dados.Cargo, 120);
   const papel = PAPEIS.indexOf(dados.Papel) >= 0 ? dados.Papel : null;
+  const status = dados.Status === 'inativo' ? 'inativo' : 'ativo';
 
   if (!nome || !email || !papel) throw new Error('Preencha nome, e-mail e papel.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail inválido.');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return comLock_(() => {
     const usuarios = readAll_(SHEETS.USUARIOS, USUARIOS_HEADERS);
     const isNew = !dados.ID;
     const existente = !isNew ? usuarios.find(u => u.ID === dados.ID) : null;
@@ -34,7 +34,10 @@ function apiSalvarUsuario(token, dados) {
     // desativar — evita se trancar pra fora do sistema sem querer.
     if (existente && existente.ID === sessao.usuarioId) {
       if (papel !== existente.Papel) throw new Error('Você não pode alterar o próprio papel.');
-      if (dados.Status === 'inativo') throw new Error('Você não pode desativar a própria conta.');
+      if (status === 'inativo') throw new Error('Você não pode desativar a própria conta.');
+    }
+    if (existente && existente.Papel === 'PMO' && existente.Status === 'ativo' && (papel !== 'PMO' || status === 'inativo')) {
+      garantirOutroPmoAtivo_(usuarios, existente.ID);
     }
 
     const duplicado = usuarios.find(u =>
@@ -45,6 +48,9 @@ function apiSalvarUsuario(token, dados) {
     // preserva a senha atual (mesmo padrão do projeto Diagnóstico).
     const senha = sanitize_(dados.Senha, 200);
     if (isNew && !senha) throw new Error('Defina uma senha inicial para o novo usuário.');
+    if (senha && senha.length < SENHA_MIN_CARACTERES) {
+      throw new Error('A senha precisa ter pelo menos ' + SENHA_MIN_CARACTERES + ' caracteres.');
+    }
     const senhaHash = senha ? hashSenha_(senha) : (existente ? existente.SenhaHash : '');
 
     const sh = ss_().getSheetByName(SHEETS.USUARIOS);
@@ -56,7 +62,7 @@ function apiSalvarUsuario(token, dados) {
       if (h === 'SenhaHash') return senhaHash;
       if (h === 'Cargo') return cargo;
       if (h === 'Papel') return papel;
-      if (h === 'Status') return dados.Status === 'inativo' ? 'inativo' : 'ativo';
+      if (h === 'Status') return status;
       if (h === 'CriadoPor') return existente ? existente.CriadoPor : sessao.nome;
       if (h === 'CriadoEm') return existente ? existente.CriadoEm : nowIso_();
       if (h === 'AtualizadoEm') return nowIso_();
@@ -65,13 +71,21 @@ function apiSalvarUsuario(token, dados) {
 
     if (existente) {
       sh.getRange(existente._row, 1, 1, USUARIOS_HEADERS.length).setValues([row]);
+      // papel, status ou senha diferentes: as sessões abertas dessa pessoa caem
+      if (papel !== existente.Papel || status !== existente.Status || senha) encerrarSessoesDe_(existente.ID);
     } else {
-      sh.appendRow(row);
+      sh.getRange(sh.getLastRow() + 1, 1, 1, USUARIOS_HEADERS.length).setValues([row]);
     }
     return { ok: true, id: id };
-  } finally {
-    lock.releaseLock();
-  }
+  });
+}
+
+const SENHA_MIN_CARACTERES = 6;
+
+// O sistema nunca pode ficar sem um PMO ativo (só ele gere usuários).
+function garantirOutroPmoAtivo_(usuarios, idSaindo) {
+  const outros = usuarios.filter(u => u.Papel === 'PMO' && u.Status === 'ativo' && u.ID !== idSaindo);
+  if (!outros.length) throw new Error('Operação bloqueada: este é o último PMO ativo do sistema.');
 }
 
 // Soft-disable (Status='inativo'), nunca exclusão física — mesmo
@@ -80,12 +94,15 @@ function apiSalvarUsuario(token, dados) {
 function apiDesativarUsuario(token, id) {
   const sessao = exigirPMO_(token);
   if (id === sessao.usuarioId) throw new Error('Você não pode desativar a própria conta.');
-  const usuario = readAll_(SHEETS.USUARIOS, USUARIOS_HEADERS).find(u => u.ID === id);
-  if (!usuario) throw new Error('Usuário não encontrado.');
-  ss_().getSheetByName(SHEETS.USUARIOS)
-    .getRange(usuario._row, USUARIOS_HEADERS.indexOf('Status') + 1)
-    .setValue('inativo');
-  return { ok: true };
+  return comLock_(() => {
+    const usuarios = readAll_(SHEETS.USUARIOS, USUARIOS_HEADERS);
+    const usuario = usuarios.find(u => u.ID === id);
+    if (!usuario) throw new Error('Usuário não encontrado.');
+    if (usuario.Papel === 'PMO' && usuario.Status === 'ativo') garantirOutroPmoAtivo_(usuarios, id);
+    atualizarCampos_(SHEETS.USUARIOS, USUARIOS_HEADERS, usuario._row, { Status: 'inativo', AtualizadoEm: nowIso_() });
+    encerrarSessoesDe_(id);
+    return { ok: true };
+  });
 }
 
 // ────────────────────────────────────────────── SEMENTE (rodar no editor) ──
@@ -99,6 +116,7 @@ function apiDesativarUsuario(token, id) {
 // funções terminadas em "_" (convenção de função privada) — esta precisa
 // aparecer porque é rodada manualmente.
 function semearPrimeiroPmo() {
+  somenteEditor_();
   const NOME_ADMIN = 'Núcleo de Projetos';
   const EMAIL_ADMIN = 'nucleodeprojetos@hospitaldabaleia.org.br';
 
@@ -114,6 +132,7 @@ function semearPrimeiroPmo() {
     sh.getRange(existente._row, col('SenhaHash')).setValue(hashSenha_(senhaTemp));
     sh.getRange(existente._row, col('Status')).setValue('ativo');
     sh.getRange(existente._row, col('AtualizadoEm')).setValue(nowIso_());
+    encerrarSessoesDe_(existente.ID);
     msg = 'PMO já existia — senha RENOVADA.';
   } else {
     sh.appendRow([
