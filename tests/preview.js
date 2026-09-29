@@ -32,6 +32,19 @@ const H = g('USUARIOS_HEADERS');
 amb.aba('Usuarios').data[1][H.indexOf('SenhaHash')] = g('hashSenha_')('senha123');
 const tPmo = g('login')('nucleodeprojetos@hospitaldabaleia.org.br', 'senha123').token;
 g('criarProjetosExemplo')();
+// mais volume para a tela: pedidos em análise, urgente e uma obra publicada
+[['Marina Rocha', 'Coordenadora do Laboratório', 'Laboratório', 'Ampliação da sala de coleta do laboratório para reduzir filas', 'Urgente — menos de 1 mês'],
+ ['Carlos Nunes', 'Gerente de TI', 'TI', 'Novo data center com climatização redundante', 'Necessário em até 3 meses'],
+ ['Luiza Prado', 'Supervisora de Hotelaria', 'Hotelaria / Higienização', 'Reforma da lavanderia central', 'Planejado — mais de 3 meses']]
+  .forEach(([Nome, Cargo, Area, FinalidadeObjetivo, Urgencia]) => g('apiCriarPedido')({ Nome, Cargo, Contato: 'contato@hospitaldabaleia.org.br', Area, FinalidadeObjetivo, Urgencia, SetorDesejado: Area }));
+g('apiAtualizarStatusPedido')(tPmo, 'PED-2026-003', 'Em análise', 'Visita técnica agendada.');
+(function () {
+  const d = new Date(); d.setDate(d.getDate() + 1);
+  const prazo = d.toISOString().slice(0, 10);
+  const id = g('apiSalvarObra')(tPmo, { Titulo: 'Troca do piso do corredor da UTI adulto', Setor: 'UTI', PrazoManifestacao: prazo, ResponsavelNome: 'Carla Mendes' }, [{ Codigo: '1', Descricao: 'Retirada do piso antigo' }]).id;
+  g('apiPublicarObra')(tPmo, id);
+  g('apiSalvarObra')(tPmo, { Titulo: 'Adequação elétrica do Pronto Atendimento', Setor: 'Pronto Atendimento', ResponsavelNome: 'Rafael Souza' }, []);
+})();
 [['Carla Mendes', 'carla.mendes@hospitaldabaleia.org.br', 'Engenheira Civil', 'Engenharia'],
  ['Rafael Souza', 'rafael.souza@hospitaldabaleia.org.br', 'Engenheiro Eletricista', 'Engenharia'],
  ['Joana Lima', 'joana.lima@hospitaldabaleia.org.br', 'Mestre de obras', 'Responsavel'],
@@ -167,6 +180,7 @@ async function main() {
         await pagina.waitForTimeout(400);
         await pagina.click('.seg-abas button:nth-child(1)');
         await pagina.click('.pg-header .btn-primary');
+        await pagina.waitForTimeout(150); // o modal põe o foco no Nome logo depois de abrir
         await pagina.fill('#mu_nome', 'Teste Visual');
         await pagina.fill('#mu_email', 'teste.visual@hospitaldabaleia.org.br');
         await pagina.selectOption('#mu_perfil', 'Consulta');
@@ -188,7 +202,7 @@ async function main() {
         g('apiSalvarPerfil')(tPmo, { Perfil: 'Consulta', Permissoes: consulta.filter(x => x !== 'projetos.editar') });
         g('apiSalvarAprovadores')(tPmo, []);
         const u = cfg.usuarios.find(x => x.Email === 'teste.visual@hospitaldabaleia.org.br');
-        g('apiSalvarUsuario')(tPmo, { ID: u.ID, Nome: u.Nome, Email: 'removido.' + nomeTam + '@x.org', Papel: 'Consulta', Status: 'inativo' });
+        if (u) g('apiSalvarUsuario')(tPmo, { ID: u.ID, Nome: u.Nome, Email: 'removido.' + nomeTam + '@x.org', Papel: 'Consulta', Status: 'inativo' });
         await pagina.evaluate(() => { CFG = null; });
       } else if (passo.indexOf('js:') === 0) {
         // passo livre: "js:<código>=<nome da captura>" (ex.: abrir o detalhe de uma obra)

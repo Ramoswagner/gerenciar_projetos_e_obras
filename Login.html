@@ -45,6 +45,8 @@ function guardarSessao_(r){
 function limparSessao_(){
   ['obrasHbToken','obrasHbPapel','obrasHbNome','obrasHbCargo','obrasHbPerms'].forEach(k=>sessionStorage.removeItem(k));
   TOKEN='';PAPEL='';NOME='';CARGO='';PERMS=null;
+  limparMemoTelas_();
+  if(typeof PAINEL!=='undefined') PAINEL=null;
 }
 
 // Chamada pelos handlers de erro das telas: se a mensagem indica sessão

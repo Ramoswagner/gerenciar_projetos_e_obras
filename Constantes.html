@@ -63,6 +63,20 @@ function fmtMoeda(n){
   return 'R$ '+n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 function copiar(txt,msg){navigator.clipboard.writeText(txt).then(()=>toast(msg||'Copiado!')).catch(()=>{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast(msg||'Copiado!');});}
+// Última versão de cada tela guardada no navegador (sessionStorage): a tela
+// abre na hora, mesmo depois de recarregar a página, e se atualiza por baixo.
+// Some ao fechar a aba ou ao sair. Sem argumento `valor` lê; com, grava.
+function memoTela_(chave, valor){
+  const k = 'obrasHbTela_' + chave;
+  try{
+    if(valor === undefined){ const v = sessionStorage.getItem(k); return v ? JSON.parse(v) : null; }
+    sessionStorage.setItem(k, JSON.stringify(valor));
+  }catch(e){ /* navegador sem espaço ou em modo restrito: a tela só não abre instantânea */ }
+  return null;
+}
+function limparMemoTelas_(){
+  try{ Object.keys(sessionStorage).filter(k=>k.indexOf('obrasHbTela_')===0).forEach(k=>sessionStorage.removeItem(k)); }catch(e){}
+}
 function marcarErro(ids){
   ids.forEach(id=>{
     const rich=$(id+'-rich');

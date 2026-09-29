@@ -389,6 +389,39 @@ teste('tela aberta de novo (cache quente) não toca na planilha', () => {
   assert.strictEqual(s.amb.stats.chamadasPlanilha - antes, 0);
 });
 
+// ─────────────────────────────── painel ───────────────────────────────
+
+teste('painel: "aguardando você" respeita o perfil de quem está logado', () => {
+  const s = sistemaComPmo();
+  s.g('criarProjetosExemplo')(); // deixa 1 medição pendente
+  s.g('apiCriarPedido')({ Nome: 'A', Cargo: 'B', Contato: 'c', Area: 'TI', FinalidadeObjetivo: 'Pedido novo', Urgencia: 'Urgente — menos de 1 mês' });
+  const tEng = criarUsuario(s, 'Engenharia', 'eng@hospital.org');
+  const tCons = criarUsuario(s, 'Consulta', 'cons@hospital.org');
+  const tResp = criarUsuario(s, 'Responsavel', 'resp@hospital.org');
+  novaExecucao(s);
+  const tipos = (t) => s.g('apiPainel')(t).aguardando.map(a => a.tipo).sort().join(',');
+  assert.strictEqual(tipos(s.token), 'medicao,pedido');
+  assert.strictEqual(tipos(tEng), 'pedido');
+  assert.strictEqual(tipos(tCons), '');
+  assert.throws(() => s.g('apiPainel')(tResp), /restrita/);
+  // urgente vem primeiro
+  assert.strictEqual(s.g('apiPainel')(s.token).aguardando[0].tipo, 'pedido');
+});
+
+teste('painel: situação atrasado/atenção e indicadores', () => {
+  const s = sistemaComPmo();
+  s.g('criarProjetosExemplo')(); // obra 2 tem pacote em andamento com fim no passado
+  novaExecucao(s);
+  const p = s.g('apiPainel')(s.token);
+  const obra2 = p.itens.find(i => i.ID === 'OBR-2026-002');
+  assert.strictEqual(obra2.situacao, 'atrasado');
+  assert.match(obra2.motivo, /atrasad/);
+  assert.strictEqual(p.indicadores.projetosAtivos, 2);
+  assert.strictEqual(p.indicadores.atrasados, 1);
+  assert.strictEqual(p.indicadores.valorMedidoPendente, 18000);
+  assert.deepStrictEqual(Array.from(p.fases), ['Pedido', 'Manifestação', 'Cronograma', 'Validado', 'Execução', 'Encerramento']);
+});
+
 // ─────────────────────────────── fluxo completo ───────────────────────────────
 
 teste('fluxo completo de exemplo (pedido → obra → cronograma → baseline → medições) roda sem erro', () => {
