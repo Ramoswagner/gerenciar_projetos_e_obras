@@ -1,0 +1,196 @@
+<script>
+// ═══════════════════ MARCAÇÃO LEVE + EDITOR VISUAL ═══════════════════
+// Portado do App.html do sistema atual. Marcação em texto puro:
+// **negrito**, *itálico*, ==destaque==, "- " lista, "1. " lista numerada.
+// ORDEM CRÍTICA: esc() PRIMEIRO (neutraliza qualquer HTML digitado),
+// transformações só sobre o texto já escapado — inverter reabriria
+// injeção nos formulários públicos.
+function mdInline_(s){
+  return s
+    .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+    .replace(/\*([^*]+)\*/g,'<i>$1</i>')
+    .replace(/==([^=]+)==/g,'<span class="md-destaque">$1</span>');
+}
+
+function renderMarkdownLite(texto){
+  const linhas=esc(texto).split('\n');
+  let html='',lista=null;
+  const fechar=()=>{if(lista){html+='</'+lista+'>';lista=null;}};
+  linhas.forEach(l=>{
+    let m=l.match(/^- (.+)$/);
+    if(m){
+      if(lista!=='ul'){fechar();html+='<ul class="md-lista">';lista='ul';}
+      html+='<li>'+mdInline_(m[1])+'</li>';return;
+    }
+    m=l.match(/^\d+\. (.+)$/);
+    if(m){
+      if(lista!=='ol'){fechar();html+='<ol class="md-lista">';lista='ol';}
+      html+='<li>'+mdInline_(m[1])+'</li>';return;
+    }
+    fechar();html+=mdInline_(l)+'\n';
+  });
+  fechar();
+  return html.replace(/\n$/,'');
+}
+
+// Editor visual: negrito aparece em negrito enquanto se digita, não como
+// "**texto**". Por baixo, o textarea original é a fonte da verdade oculta —
+// toda edição na caixa visível (contentEditable) é serializada de volta
+// para a marcação em texto puro e escrita no textarea a cada tecla. Só
+// esse texto puro sai do navegador; nunca se guarda HTML na planilha
+// (formulários públicos sem login — HTML cru salvo e exibido é injeção).
+function attachFormatToolbar(textareaId){
+  const ta=$(textareaId);
+  if(!ta||ta.dataset.fmtbar)return;
+  ta.dataset.fmtbar='1';
+
+  const bar=document.createElement('div');
+  bar.className='fmt-bar';
+  const rich=document.createElement('div');
+  rich.contentEditable='true';
+  rich.className='rich-editor';
+  rich.id=textareaId+'-rich';
+  rich.setAttribute('data-placeholder',ta.getAttribute('placeholder')||'');
+  rich.innerHTML=ta.value?renderMarkdownLite(ta.value):'';
+
+  const sync=()=>{
+    ta.value=serializeRico_(rich);
+    ta.dispatchEvent(new Event('input',{bubbles:true}));
+  };
+  const acao=(cmd,valor)=>{
+    rich.focus();
+    try{document.execCommand(cmd,false,valor||null);}catch(e){}
+    sync();
+  };
+
+  const grupos=[
+    [['format_bold','Negrito','bold'],
+     ['format_italic','Itálico','italic']],
+    [['format_list_bulleted','Lista com marcadores','insertUnorderedList'],
+     ['format_list_numbered','Lista numerada','insertOrderedList']],
+    [['ink_highlighter','Destaque','hiliteColor','#F59E0B']]
+  ];
+  grupos.forEach((grupo,gi)=>{
+    if(gi>0){const sep=document.createElement('span');sep.className='fmt-sep';bar.appendChild(sep);}
+    grupo.forEach(([ico,titulo,cmd,valor])=>{
+      const b=document.createElement('button');
+      b.type='button';b.className='fmt-btn';b.title=titulo;
+      b.innerHTML='<span class="ico" style="font-size:16px">'+ico+'</span>';
+      // mousedown (não click) + preventDefault: preserva a seleção de texto
+      // na caixa, que se perderia se o foco passasse pelo botão primeiro
+      b.addEventListener('mousedown',e=>{e.preventDefault();acao(cmd,valor);});
+      bar.appendChild(b);
+    });
+  });
+
+  ta.style.display='none';
+  // invólucro único: barra + caixa + textarea viram UM filho do layout —
+  // containers flex com gap não abrem espaço entre a barra e a caixa
+  const wrapEl=document.createElement('div');
+  wrapEl.className='fmt-wrap';
+  ta.parentNode.insertBefore(wrapEl,ta);
+  wrapEl.appendChild(bar);
+  wrapEl.appendChild(rich);
+  wrapEl.appendChild(ta);
+  rich.addEventListener('input',sync);
+  try{document.execCommand('defaultParagraphSeparator',false,'div');}catch(e){}
+}
+
+// Zero-width space (U+200B) quebra pares de marcador digitados como
+// texto normal (não via botão), para que renderMarkdownLite não os
+// reinterprete depois. ATENÇÃO: as strings abaixo contêm o caractere
+// INVISÍVEL literal entre os marcadores — ao editar este trecho, conferir
+// os bytes (e2 80 8b) com grep binário antes e depois.
+function escaparMarcadorLivre_(s){
+  return s.replace(/\*\*/g,'*​*').replace(/==/g,'=​=');
+}
+function escaparInicioLinha_(l){
+  if(/^- /.test(l)||/^\d+\. /.test(l))return '​'+l;
+  return l;
+}
+
+// Serialização do DOM do editor de volta pra marcação em texto puro.
+// Nunca copia uma tag desconhecida para a saída — só reconhece negrito,
+// itálico, destaque e listas; qualquer outra formatação que o navegador
+// produza é reduzida a texto puro.
+function ehNegrito_(no){
+  return no.tagName==='B'||no.tagName==='STRONG'||
+    (no.style&&(no.style.fontWeight==='bold'||no.style.fontWeight==='700'));
+}
+function ehItalico_(no){
+  return no.tagName==='I'||no.tagName==='EM'||(no.style&&no.style.fontStyle==='italic');
+}
+function ehDestaque_(no){
+  return !!(no.style&&no.style.backgroundColor);
+}
+function serializarInline_(no){
+  if(no.nodeType===3)return escaparMarcadorLivre_(no.nodeValue||'');
+  if(no.nodeType!==1)return '';
+  if(no.tagName==='BR')return '\n';
+  let dentro='';
+  no.childNodes.forEach(c=>{dentro+=serializarInline_(c);});
+  if(!dentro)return '';
+  if(ehNegrito_(no))dentro='**'+dentro+'**';
+  if(ehItalico_(no))dentro='*'+dentro+'*';
+  if(ehDestaque_(no))dentro='=='+dentro+'==';
+  return dentro;
+}
+function linhasDeLista_(ul){
+  const numerada=ul.tagName==='OL';
+  const linhas=[];let n=0;
+  Array.from(ul.children).forEach(li=>{
+    if(li.tagName!=='LI')return;
+    n++;
+    const txt=serializarInline_(li).replace(/\n+/g,' ').trim();
+    linhas.push((numerada?n+'. ':'- ')+txt);
+  });
+  return linhas;
+}
+// Junta texto e formatação inline numa única linha — <br> só quebra
+// dentro do mesmo parágrafo; DIV/P/UL/OL abrem bloco novo.
+function linhasDeContainer_(container){
+  const linhas=[];
+  let linhaAtual='';
+  const fecharLinha=()=>{
+    if(linhaAtual==='')return; // nada acumulado: não empurra linha em branco espúria
+    linhaAtual.split('\n').forEach(l=>linhas.push(escaparInicioLinha_(l)));
+    linhaAtual='';
+  };
+  container.childNodes.forEach(no=>{
+    if(no.nodeType===3){linhaAtual+=escaparMarcadorLivre_(no.nodeValue||'');return;}
+    if(no.nodeType!==1)return;
+    if(no.tagName==='BR'){linhaAtual+='\n';return;}
+    if(no.tagName==='UL'||no.tagName==='OL'){
+      fecharLinha();
+      linhas.push(...linhasDeLista_(no));
+      return;
+    }
+    if(no.tagName==='DIV'||no.tagName==='P'){
+      fecharLinha();
+      linhas.push(...linhasDeContainer_(no));
+      return;
+    }
+    linhaAtual+=serializarInline_(no);
+  });
+  fecharLinha();
+  return linhas;
+}
+function serializeRico_(root){
+  return linhasDeContainer_(root).join('\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+// ── guarda de formulário não enviado ──
+let FORM_GUARD=null;
+function ativarGuardaFormulario(selector){
+  desativarGuardaFormulario();
+  FORM_GUARD=e=>{
+    const sujo=Array.from(document.querySelectorAll(selector)).some(el=>
+      el.type==='checkbox'||el.type==='radio'?el.checked:el.value.trim());
+    if(sujo){e.preventDefault();e.returnValue='Você tem um formulário não enviado.';}
+  };
+  window.addEventListener('beforeunload',FORM_GUARD);
+}
+function desativarGuardaFormulario(){
+  if(FORM_GUARD){window.removeEventListener('beforeunload',FORM_GUARD);FORM_GUARD=null;}
+}
+</script>

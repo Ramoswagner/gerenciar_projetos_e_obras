@@ -1,0 +1,352 @@
+<script>
+// ═══════════════════════════ ENCERRAMENTO (Fase 10) ═══════════════════════════
+// Fiel ao modelo "encerramento_e_entrega_handover_digital": stepper de 4
+// etapas (3 de checklist + Aceite Final resolvido pelas assinaturas),
+// checklist com posicionamento (Pendente/Ciente/Objeção), repositório de
+// documentos as-built (upload real) e painel de assinaturas. Portfólio
+// com filtro por obra (mesmo padrão já validado em Lookahead/Pagamentos).
+
+ROTAS['encerramento'] = carregarEncerramento;
+
+const ENCERRAMENTO_ETAPAS_ORDEM = ['Inspeção Técnica', 'Lista de Qualidade', 'Revisão Documental'];
+
+let ENCERRAMENTO_RESUMO = null;
+let ENCERRAMENTO_OBRA_ATUAL = null;
+let ENCERRAMENTO_DETALHE = null;
+
+// Stale-while-revalidate (mesmo padrão do resto do app): com cache em
+// memória, renderiza na hora e atualiza por baixo.
+async function carregarEncerramento(){
+  const tinhaCache = !!ENCERRAMENTO_RESUMO;
+  ENCERRAMENTO_OBRA_ATUAL = null;
+  if(tinhaCache){ renderEncerramentoResumo(); } else { skeleton('lista'); }
+  try{
+    const frescos = await gs('apiEncerramentoResumo', TOKEN);
+    const mudou = JSON.stringify(frescos)!==JSON.stringify(ENCERRAMENTO_RESUMO);
+    ENCERRAMENTO_RESUMO = frescos;
+    if(!tinhaCache || (mudou && NAV_ATIVO==='encerramento' && !ENCERRAMENTO_OBRA_ATUAL)) renderEncerramentoResumo();
+  }catch(e){ if(!tratarErroSessao(e)&&!tinhaCache) toast(e.message); }
+}
+
+function linhaResumoEncerramento_(r){
+  const okChecklist = r.totalChecklist>0 && r.checklistResolvido;
+  const okAssinaturas = r.totalAssinaturas>0 && r.assinaturasCompletas;
+  return `<tr>
+    <td><b>${esc(r.Titulo)}</b></td>
+    <td><span class="pill ${r.Status==='Finalizado'?'pill-liberada':'pill-rascunho'}">${esc(r.Status)}</span></td>
+    <td>${r.totalChecklist ? (okChecklist?'<span class="pill pill-liberada">Resolvido</span>':'<span class="pill pill-encerrada">'+r.totalChecklist+' item(ns)</span>') : '<span style="color:var(--muted)">—</span>'}</td>
+    <td>${r.totalAssinaturas ? (okAssinaturas?'<span class="pill pill-liberada">Completo</span>':'<span class="pill pill-encerrada">'+r.totalAssinaturas+' signatário(s)</span>') : '<span style="color:var(--muted)">—</span>'}</td>
+    <td><button class="btn btn-ghost" onclick="abrirEncerramentoObra('${esc(r.ID)}')"><span class="ico">visibility</span>Abrir</button></td>
+  </tr>`;
+}
+
+function renderEncerramentoResumo(){
+  let h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">ENCERRAMENTO</span></div>
+    <h2>Encerramento</h2>
+    <p class="ph-desc">Inspeção técnica, checklist de qualidade, documentos as-built e assinaturas de aceite final.</p></div>
+  </div>`;
+
+  if(!ENCERRAMENTO_RESUMO.length){
+    h += `<div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">verified</span>
+      <h2 style="justify-content:center;margin-top:10px">Nenhuma obra elegível ainda</h2>
+      <p style="color:var(--muted);max-width:460px;margin:6px auto 0">O encerramento fica disponível pra obras Liberada, Em execução, Concluída ou Finalizado.</p></div>`;
+    renderShell('encerramento', h, true);
+    return;
+  }
+
+  h += `<div class="tab-card depth-card"><div class="tc-head"><h3>Obras (${ENCERRAMENTO_RESUMO.length})</h3></div>
+    <div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>Obra</th><th>Status</th><th>Checklist</th><th>Assinaturas</th><th></th></tr></thead>
+      <tbody>${ENCERRAMENTO_RESUMO.map(linhaResumoEncerramento_).join('')}</tbody>
+    </table></div></div>`;
+
+  renderShell('encerramento', h, true);
+}
+
+async function abrirEncerramentoObra(idObra){
+  loading('Carregando encerramento da obra…');
+  try{
+    ENCERRAMENTO_DETALHE = await gs('apiGetEncerramento', TOKEN, idObra);
+    ENCERRAMENTO_OBRA_ATUAL = idObra;
+    renderEncerramentoDetalhe();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function etapaCompleta_(itensDaEtapa){
+  return itensDaEtapa.length>0 && itensDaEtapa.every(i=>i.Posicionamento!=='Pendente');
+}
+
+function stepperHtml_(checklist, assinaturas){
+  const porEtapa = ENCERRAMENTO_ETAPAS_ORDEM.map(etapa=>({
+    etapa: etapa, completa: etapaCompleta_(checklist.filter(c=>c.Etapa===etapa))
+  }));
+  const assinaturasCompletas = assinaturas.length>0 && assinaturas.every(a=>a.Status==='Assinado');
+  const passos = porEtapa.map(e=>({label:e.etapa, done:e.completa})).concat([{label:'Aceite Final', done: assinaturasCompletas}]);
+  let ativoIdx = passos.findIndex(p=>!p.done);
+  if(ativoIdx<0) ativoIdx = passos.length-1;
+
+  return `<div class="tab-card depth-card" style="padding:22px 24px;margin-bottom:16px">
+    <div class="encerramento-stepper">
+      <div class="est-linha-fundo"></div>
+      <div class="est-linha-ativa" style="width:${ativoIdx===0?0:(ativoIdx/(passos.length-1))*100}%"></div>
+      ${passos.map((p,i)=>`<div class="est-step">
+        <div class="est-circulo ${p.done?'est-done':i===ativoIdx?'est-ativo':''}">${p.done?'<span class="ico" style="font-size:16px">check</span>':(i+1)}</div>
+        <div class="est-label ${p.done?'est-label-done':i===ativoIdx?'est-label-ativo':''}">${esc(p.label)}</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function chipPosicionamento_(pos){
+  if(pos==='Ciente') return '<span class="pill pill-liberada">CIENTE</span>';
+  if(pos==='Objeção') return '<span class="pill pill-recusado">OBJEÇÃO</span>';
+  return '<span class="pill pill-rascunho">PENDENTE</span>';
+}
+
+function itemChecklistHtml_(item){
+  return `<div class="ec-item">
+    <span class="ico ec-check ${item.Posicionamento!=='Pendente'?'ec-check-on':''}">${item.Posicionamento!=='Pendente'?'check_box':'check_box_outline_blank'}</span>
+    <div class="ec-item-corpo">
+      <div class="ec-item-topo"><b>${esc(item.ItemChecklist)}</b>${chipPosicionamento_(item.Posicionamento)}</div>
+      ${item.Descricao?'<p class="ec-item-desc">'+esc(item.Descricao)+'</p>':''}
+      ${item.ResponsavelArea?'<p class="ec-item-resp"><span class="ico" style="font-size:13px">badge</span>'+esc(item.ResponsavelArea)+'</p>':''}
+      ${item.Posicionamento==='Objeção'?'<div class="ec-alerta"><span class="ico">warning</span>'+esc(item.ObservacaoObjecao)+'</div>':''}
+      <div class="ec-item-acoes">
+        ${item.Posicionamento!=='Ciente'?'<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="marcarPosicionamentoRapido_(\''+esc(item.ID)+'\',\'Ciente\')">Ciente</button>':''}
+        ${item.Posicionamento!=='Objeção'?'<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="abrirObjecao_(\''+esc(item.ID)+'\')">Objeção</button>':''}
+        ${item.Posicionamento!=='Pendente'?'<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="marcarPosicionamentoRapido_(\''+esc(item.ID)+'\',\'Pendente\')">Reabrir</button>':''}
+        <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="excluirItemChecklist_('${esc(item.ID)}')" title="Excluir"><span class="ico" style="font-size:13px">delete</span></button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function etapaChecklistHtml_(etapa, itens){
+  const total = itens.length;
+  const resolvidos = itens.filter(i=>i.Posicionamento!=='Pendente').length;
+  const pct = total ? Math.round(resolvidos/total*100) : 0;
+  return `<div class="tab-card depth-card" style="margin-bottom:14px">
+    <div class="tc-head">
+      <div><h3>${esc(etapa)}</h3></div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="pill pill-rascunho">${pct}% Complete</span>
+        <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="abrirNovoItemChecklist_('${esc(etapa)}')"><span class="ico" style="font-size:15px">add</span>Item</button>
+      </div>
+    </div>
+    <div>${itens.length ? itens.map(itemChecklistHtml_).join('') : '<p style="color:var(--muted);font-size:13px;padding:16px 22px">Nenhum item cadastrado ainda nesta etapa.</p>'}</div>
+  </div>`;
+}
+
+function iconeDocumento_(tipo){
+  if(/pdf/.test(tipo)) return 'picture_as_pdf';
+  if(/image/.test(tipo)) return 'image';
+  if(/dwg|cad/.test(tipo)) return 'architecture';
+  return 'description';
+}
+
+function repositorioHtml_(documentos){
+  return `<div class="tab-card depth-card">
+    <div class="tc-head"><h3><span class="ico">folder_open</span>Repositório As-Built</h3></div>
+    <div style="padding:14px 18px">
+      ${documentos.map(d=>`<div class="evid-item">
+        <a href="${esc(d.LinkArquivo)}" target="_blank" rel="noopener"><span class="ico" style="font-size:18px">${iconeDocumento_(d.Tipo)}</span>
+          <span>${esc(d.NomeArquivo)}<br><small style="color:var(--muted)">${esc(d.TamanhoOuData)} · ${esc((d.EnviadoEm||'').slice(0,10))}</small></span></a>
+        <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" onclick="excluirDocumentoEncerramento_('${esc(d.ID)}')"><span class="ico" style="font-size:13px">delete</span></button>
+      </div>`).join('') || '<p style="color:var(--muted);font-size:12.5px">Nenhum documento enviado ainda.</p>'}
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="file" id="ec_doc_file" style="max-width:220px">
+        <button type="button" class="btn btn-ghost" onclick="enviarDocumentoEncerramento_()"><span class="ico" style="font-size:15px">upload</span>Enviar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function avatarAssinatura_(a){
+  if(a.Status==='Assinado') return '<div class="ea-avatar ea-avatar-ok"><span class="ico">check</span></div>';
+  return '<div class="ea-avatar ea-avatar-pendente"><span class="ico">schedule</span></div>';
+}
+
+function linhaAssinatura_(a){
+  return `<div class="ea-linha ${a.Status==='Pendente'?'ea-linha-pendente':''}">
+    ${avatarAssinatura_(a)}
+    <div class="ea-info"><b>${esc(a.NomeSignatario)}</b><small>${esc(a.Cargo||'')}</small></div>
+    ${a.Status==='Assinado'
+      ? '<span class="ea-data">'+esc((a.AssinadoEm||'').replace('T',' ').slice(0,16))+'</span>'
+      : '<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="assinarDocumento_(\''+esc(a.ID)+'\')">Assinar</button>'}
+    ${a.Status==='Pendente'?'<button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" onclick="excluirSignatario_(\''+esc(a.ID)+'\')" title="Remover"><span class="ico" style="font-size:13px">close</span></button>':''}
+  </div>`;
+}
+
+function painelAssinaturasHtml_(assinaturas, idObra){
+  const todasAssinadas = assinaturas.length>0 && assinaturas.every(a=>a.Status==='Assinado');
+  return `<div class="tab-card depth-card">
+    <div class="ea-cabecalho"><h3>Assinatura Final</h3><p>Aceite Final</p></div>
+    <div style="padding:16px 18px">
+      ${assinaturas.map(linhaAssinatura_).join('') || '<p style="color:var(--muted);font-size:12.5px">Nenhum signatário cadastrado ainda.</p>'}
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="ec_sig_nome" placeholder="Nome" style="max-width:130px">
+        <input type="text" id="ec_sig_cargo" placeholder="Cargo" style="max-width:130px">
+        <button type="button" class="btn btn-ghost" onclick="adicionarSignatario_('${esc(idObra)}')"><span class="ico" style="font-size:15px">person_add</span>Adicionar</button>
+      </div>
+      ${PAPEL==='PMO' ? `<button class="btn ${todasAssinadas?'btn-primary':'btn-ghost'}" style="width:100%;margin-top:14px" ${todasAssinadas?'':'disabled'} onclick="finalizarObraEncerramento_('${esc(idObra)}')"><span class="ico">verified</span>Finalizar Encerramento</button>
+      <p style="text-align:center;font-size:10px;color:var(--muted);margin-top:6px">Todos os pré-requisitos precisam ser cumpridos antes de finalizar.</p>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderEncerramentoDetalhe(){
+  const d = ENCERRAMENTO_DETALHE;
+  let h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">ENCERRAMENTO</span><span class="ref-code">${esc(d.obra.ID)}</span></div>
+    <h2>Encerramento — ${esc(d.obra.Titulo)}</h2>
+    <p class="ph-desc">Status atual: <span class="pill ${d.obra.Status==='Finalizado'?'pill-liberada':'pill-rascunho'}">${esc(d.obra.Status)}</span></p></div>
+    <button class="btn btn-ghost" onclick="carregarEncerramento()"><span class="ico">arrow_back</span>Voltar</button>
+  </div>`;
+
+  h += stepperHtml_(d.checklist, d.assinaturas);
+
+  h += `<div class="grid-8-4">
+    <div>${ENCERRAMENTO_ETAPAS_ORDEM.map(etapa=>etapaChecklistHtml_(etapa, d.checklist.filter(c=>c.Etapa===etapa))).join('')}</div>
+    <div class="painel-lateral">
+      ${repositorioHtml_(d.documentos)}
+      ${painelAssinaturasHtml_(d.assinaturas, d.obra.ID)}
+    </div>
+  </div>`;
+
+  renderShell('encerramento', h, true);
+}
+
+// ═══════════════ AÇÕES: CHECKLIST ═══════════════
+async function marcarPosicionamentoRapido_(idItem, pos){
+  try{
+    await gs('apiPosicionarItemChecklist', TOKEN, idItem, pos, '');
+    toast('Item marcado: '+pos);
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirItemChecklist_(idItem){
+  if(!confirm('Excluir este item do checklist?')) return;
+  try{
+    await gs('apiExcluirItemChecklist', TOKEN, idItem);
+    toast('Item excluído.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function abrirObjecao_(idItem){
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalObjecao" onclick="if(event.target===this)fecharObjecao_()">
+    <div class="modal-card" style="max-width:420px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0"><span class="ico">warning</span>Registrar objeção</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharObjecao_()"><span class="ico">close</span></button>
+      </div>
+      <label>Descreva a objeção *</label><textarea id="ec_objecao_texto" maxlength="1000" placeholder="o que impede este item de ser aceito…"></textarea>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-teal" onclick="confirmarObjecao_('${esc(idItem)}')"><span class="ico">check</span>Confirmar</button>
+      </div>
+    </div>
+  </div>`);
+}
+function fecharObjecao_(){ const m=$('modalObjecao'); if(m) m.remove(); }
+async function confirmarObjecao_(idItem){
+  const texto = $('ec_objecao_texto').value.trim();
+  if(!texto){ toast('Descreva a objeção.'); return; }
+  try{
+    await gs('apiPosicionarItemChecklist', TOKEN, idItem, 'Objeção', texto);
+    fecharObjecao_();
+    toast('Objeção registrada.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function abrirNovoItemChecklist_(etapa){
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalNovoItem" onclick="if(event.target===this)fecharNovoItem_()">
+    <div class="modal-card" style="max-width:460px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0"><span class="ico">playlist_add</span>Novo item — ${esc(etapa)}</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharNovoItem_()"><span class="ico">close</span></button>
+      </div>
+      <label>Item *</label><input type="text" id="ec_item_nome" maxlength="200" placeholder="ex.: Teste de pressão HVAC">
+      <label>Descrição</label><textarea id="ec_item_desc" maxlength="1000" placeholder="detalhe o que será validado…"></textarea>
+      <label>Área responsável</label><input type="text" id="ec_item_area" maxlength="120" placeholder="ex.: Engenharia Clínica">
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-teal" onclick="salvarNovoItemChecklist_('${esc(etapa)}')"><span class="ico">check</span>Adicionar</button>
+      </div>
+    </div>
+  </div>`);
+}
+function fecharNovoItem_(){ const m=$('modalNovoItem'); if(m) m.remove(); }
+async function salvarNovoItemChecklist_(etapa){
+  const nome = $('ec_item_nome').value.trim();
+  if(!nome){ toast('Descreva o item.'); return; }
+  try{
+    await gs('apiSalvarItemChecklist', TOKEN, {
+      IDObra: ENCERRAMENTO_OBRA_ATUAL, Etapa: etapa, ItemChecklist: nome,
+      Descricao: $('ec_item_desc').value.trim(), ResponsavelArea: $('ec_item_area').value.trim()
+    });
+    fecharNovoItem_();
+    toast('Item adicionado.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════ AÇÕES: DOCUMENTOS ═══════════════
+async function enviarDocumentoEncerramento_(){
+  const input = $('ec_doc_file');
+  const file = input && input.files && input.files[0];
+  if(!file){ toast('Selecione um arquivo.'); return; }
+  if(file.size > 8*1024*1024){ toast('Arquivo maior que 8MB — reduza antes de enviar.'); return; }
+  try{
+    toast('Enviando documento…');
+    const base64 = await lerArquivoBase64_(file);
+    await gs('apiUploadDocumentoEncerramento', TOKEN, ENCERRAMENTO_OBRA_ATUAL, file.name, file.type||'application/octet-stream', base64);
+    toast('Documento enviado.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+async function excluirDocumentoEncerramento_(idDocumento){
+  if(!confirm('Excluir este documento?')) return;
+  try{
+    await gs('apiExcluirDocumentoEncerramento', TOKEN, idDocumento);
+    toast('Documento excluído.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════ AÇÕES: ASSINATURAS ═══════════════
+async function adicionarSignatario_(idObra){
+  const nome = $('ec_sig_nome').value.trim();
+  const cargo = $('ec_sig_cargo').value.trim();
+  if(!nome){ toast('Informe o nome do signatário.'); return; }
+  try{
+    await gs('apiSalvarSignatario', TOKEN, idObra, nome, cargo, '');
+    toast('Signatário adicionado.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+async function excluirSignatario_(idSignatario){
+  if(!confirm('Remover este signatário?')) return;
+  try{
+    await gs('apiExcluirSignatario', TOKEN, idSignatario);
+    toast('Signatário removido.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+async function assinarDocumento_(idSignatario){
+  try{
+    await gs('apiAssinarDocumento', TOKEN, idSignatario);
+    toast('Assinatura registrada.');
+    await abrirEncerramentoObra(ENCERRAMENTO_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+async function finalizarObraEncerramento_(idObra){
+  if(!confirm('Finalizar esta obra? Esta ação encerra o ciclo de vida do projeto.')) return;
+  try{
+    await gs('apiFinalizarObra', TOKEN, idObra);
+    toast('Obra finalizada com sucesso!');
+    await abrirEncerramentoObra(idObra);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+</script>

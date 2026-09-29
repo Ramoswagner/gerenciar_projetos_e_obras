@@ -1,0 +1,462 @@
+<script>
+// ═══════════════════════ LOOKAHEAD PLANNING (janela 6 semanas) ═══════════════════════
+// Visão de portfólio (todas as obras) das restrições capturadas na coluna
+// "Restrição" do cronograma. Quadro (post-it, padrão) e Lista (detalhado
+// — KPI + grade de 6 semanas + tabela) são dois modos da MESMA tela,
+// com um filtro por obra que se aplica aos dois (client-side, sem
+// refetch — os dados completos já vêm de apiLookahead).
+
+ROTAS['lookahead'] = carregarLookahead;
+
+let LOOKAHEAD_DADOS = null;
+let LOOKAHEAD_MODO = 'quadro'; // 'quadro' (padrão) | 'lista' (detalhado)
+let LOOKAHEAD_OBRA_FILTRO = ''; // '' = todas as obras juntas
+
+// Stale-while-revalidate (mesmo padrão de Pedidos/Obras/Kanban): com
+// cache em memória, renderiza na hora e atualiza por baixo.
+async function carregarLookahead(){
+  const tinhaCache = !!LOOKAHEAD_DADOS;
+  if(tinhaCache){ renderLookahead(LOOKAHEAD_DADOS); } else { skeleton('lista'); }
+  try{
+    const frescos = await gs('apiLookahead', TOKEN);
+    const mudou = JSON.stringify(frescos)!==JSON.stringify(LOOKAHEAD_DADOS);
+    LOOKAHEAD_DADOS = frescos;
+    if(!tinhaCache || (mudou && NAV_ATIVO==='lookahead')) renderLookahead(frescos);
+  }catch(e){ if(!tratarErroSessao(e)&&!tinhaCache) toast(e.message); }
+}
+
+function alternarModoLookahead_(modo){
+  LOOKAHEAD_MODO = modo;
+  if(LOOKAHEAD_DADOS) renderLookahead(LOOKAHEAD_DADOS);
+}
+
+function filtrarObraLookahead_(idObra){
+  LOOKAHEAD_OBRA_FILTRO = idObra;
+  if(LOOKAHEAD_DADOS) renderLookahead(LOOKAHEAD_DADOS);
+}
+
+async function moverRestricaoLookahead_(id, novoStatus){
+  try{
+    await gs('apiMoverRestricao', TOKEN, id, novoStatus);
+    toast('Status atualizado: '+novoStatus);
+    carregarLookahead();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════════ MODAL DE EDIÇÃO (clique no card/linha) ═══════════════
+// Editar aqui não exige o cronograma da obra inteira carregado (diferente
+// do popup de restrições dentro do Cronograma) — só os campos da própria
+// restrição + evidências (buscadas sob demanda via apiListarEvidenciasRestricao).
+// Reaproveita APIs/funções já existentes: apiSalvarRestricao/apiMoverRestricao/
+// apiExcluirRestricao/apiUploadEvidenciaRestricao/apiExcluirEvidenciaRestricao,
+// CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE e lerArquivoBase64_ (definidas em
+// CronogramaAdmin.html — mesma página, mesmo escopo global).
+let LOOKAHEAD_EDIT_CTX = null;
+
+async function abrirEdicaoRestricaoLookahead_(idRestricao){
+  const r = (LOOKAHEAD_DADOS.restricoes || []).find(x=>x.ID===idRestricao);
+  if(!r){ toast('Restrição não encontrada.'); return; }
+  LOOKAHEAD_EDIT_CTX = { restricao: r, evidencias: [] };
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalEditRestricaoLookahead" onclick="if(event.target===this)fecharEdicaoRestricaoLookahead_()">
+    <div class="modal-card" style="max-width:560px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:4px">
+        <div><h2 style="margin:0"><span class="ico">block</span>Editar impedimento</h2>
+        <p style="font-size:12.5px;color:var(--muted);margin-top:2px">${esc(r.Atividade)} — ${esc(r.TituloObra)}</p></div>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharEdicaoRestricaoLookahead_()"><span class="ico">close</span></button>
+      </div>
+      <div id="editRestricaoBody"></div>
+    </div>
+  </div>`);
+  renderEdicaoRestricaoLookahead_();
+  try{
+    LOOKAHEAD_EDIT_CTX.evidencias = await gs('apiListarEvidenciasRestricao', TOKEN, idRestricao);
+    renderEdicaoRestricaoLookahead_();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function fecharEdicaoRestricaoLookahead_(){
+  const m = $('modalEditRestricaoLookahead');
+  if(m) m.remove();
+  LOOKAHEAD_EDIT_CTX = null;
+  // re-renderiza o quadro/lista pra refletir qualquer mudança feita no
+  // modal (status/edição/evidência) — os objetos são a mesma referência
+  // dentro de LOOKAHEAD_DADOS.restricoes, então já estão atualizados.
+  if(LOOKAHEAD_DADOS) renderLookahead(LOOKAHEAD_DADOS);
+}
+
+function acoesRestricaoModalLookahead_(r){
+  if(r.Status==='Pendente') return '<button class="btn btn-ghost" onclick="moverRestricaoModalLookahead_(\''+esc(r.ID)+'\',\'Em tratamento\')">Tratar</button>';
+  if(r.Status==='Em tratamento') return '<button class="btn btn-teal" onclick="moverRestricaoModalLookahead_(\''+esc(r.ID)+'\',\'Liberada\')">Liberar</button>';
+  return '<button class="btn btn-ghost" onclick="moverRestricaoModalLookahead_(\''+esc(r.ID)+'\',\'Pendente\')">Reabrir</button>';
+}
+
+function evidenciasSecaoLookahead_(idRestricao, evidencias){
+  const itens = evidencias.length ? evidencias.map(ev=>`<div class="evid-item">
+      <a href="${esc(ev.LinkDrive)}" target="_blank" rel="noopener"><span class="ico" style="font-size:15px">description</span>${esc(ev.NomeArquivo)}</a>
+      <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" onclick="excluirEvidenciaLookahead_('${esc(ev.ID)}')" title="Excluir evidência"><span class="ico" style="font-size:13px">delete</span></button>
+    </div>`).join('') : '<p style="font-size:12px;color:var(--muted);margin:4px 0 8px">Nenhuma evidência anexada ainda.</p>';
+  return `<div style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--border)">
+    <label style="margin-top:0">Evidências da solução <small>(fotos/documentos, até 8MB cada)</small></label>
+    <div id="editEvidLista">${itens}</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+      <input type="file" id="editEvidFile" style="max-width:220px">
+      <button type="button" class="btn btn-ghost" onclick="enviarEvidenciaLookahead_('${esc(idRestricao)}')"><span class="ico" style="font-size:15px">upload</span>Enviar</button>
+    </div>
+  </div>`;
+}
+
+function renderEdicaoRestricaoLookahead_(){
+  if(!LOOKAHEAD_EDIT_CTX) return;
+  const r = LOOKAHEAD_EDIT_CTX.restricao;
+  const body = $('editRestricaoBody');
+  if(!body) return;
+  body.innerHTML = `
+    <div class="form-grid-2">
+      <div><label>Categoria</label><select id="er_categoria">${opt(CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE, r.Categoria||CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE[0])}</select></div>
+      <div><label>Responsável</label><input type="text" id="er_resp" maxlength="120" value="${esc(r.ResponsavelNome||'')}" placeholder="quem vai remover o impedimento"></div>
+    </div>
+    <label>Descrição *</label><textarea id="er_desc" maxlength="1000">${esc(r.Descricao||'')}</textarea>
+    <label>Prazo necessário</label><input type="date" id="er_prazo" value="${esc(r.PrazoNecessario||'')}" style="max-width:180px">
+    <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <span class="pill ${pillStatusRestricao_(r.Status)}">${esc(r.Status)}</span>
+      ${acoesRestricaoModalLookahead_(r)}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-teal" onclick="salvarEdicaoRestricaoLookahead_()"><span class="ico">check</span>Salvar alterações</button>
+      <button class="btn btn-danger" onclick="excluirRestricaoLookahead_()"><span class="ico">delete</span>Excluir</button>
+    </div>
+    ${evidenciasSecaoLookahead_(r.ID, LOOKAHEAD_EDIT_CTX.evidencias)}`;
+}
+
+async function salvarEdicaoRestricaoLookahead_(){
+  if(!LOOKAHEAD_EDIT_CTX) return;
+  const desc = $('er_desc').value.trim();
+  if(!desc){ toast('Descreva a restrição.'); return; }
+  const r = LOOKAHEAD_EDIT_CTX.restricao;
+  const dados = {
+    ID: r.ID, IDObra: r.IDObra, IDPacote: r.IDPacote,
+    Categoria: $('er_categoria').value, Descricao: desc,
+    ResponsavelNome: $('er_resp').value.trim(), PrazoNecessario: $('er_prazo').value
+  };
+  try{
+    await gs('apiSalvarRestricao', TOKEN, dados);
+    Object.assign(r, { Categoria: dados.Categoria, Descricao: dados.Descricao, ResponsavelNome: dados.ResponsavelNome, PrazoNecessario: dados.PrazoNecessario });
+    toast('Restrição atualizada.');
+    fecharEdicaoRestricaoLookahead_();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function moverRestricaoModalLookahead_(idRestricao, novoStatus){
+  if(!LOOKAHEAD_EDIT_CTX) return;
+  try{
+    await gs('apiMoverRestricao', TOKEN, idRestricao, novoStatus);
+    LOOKAHEAD_EDIT_CTX.restricao.Status = novoStatus;
+    toast('Status atualizado: '+novoStatus);
+    renderEdicaoRestricaoLookahead_();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirRestricaoLookahead_(){
+  if(!LOOKAHEAD_EDIT_CTX) return;
+  if(!confirm('Excluir esta restrição?')) return;
+  const idRestricao = LOOKAHEAD_EDIT_CTX.restricao.ID;
+  try{
+    await gs('apiExcluirRestricao', TOKEN, idRestricao);
+    LOOKAHEAD_DADOS.restricoes = LOOKAHEAD_DADOS.restricoes.filter(x=>x.ID!==idRestricao);
+    toast('Restrição excluída.');
+    fecharEdicaoRestricaoLookahead_();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function enviarEvidenciaLookahead_(idRestricao){
+  const input = $('editEvidFile');
+  const file = input && input.files && input.files[0];
+  if(!file){ toast('Selecione um arquivo.'); return; }
+  if(file.size > 8*1024*1024){ toast('Arquivo maior que 8MB — reduza antes de enviar.'); return; }
+  try{
+    toast('Enviando evidência…');
+    const base64 = await lerArquivoBase64_(file);
+    const r = await gs('apiUploadEvidenciaRestricao', TOKEN, idRestricao, file.name, file.type||'application/octet-stream', base64);
+    LOOKAHEAD_EDIT_CTX.evidencias.push(r.evidencia);
+    LOOKAHEAD_EDIT_CTX.restricao.Evidencias = (LOOKAHEAD_EDIT_CTX.restricao.Evidencias||0) + 1;
+    renderEdicaoRestricaoLookahead_();
+    toast('Evidência enviada.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirEvidenciaLookahead_(idEvidencia){
+  if(!confirm('Excluir esta evidência?')) return;
+  try{
+    await gs('apiExcluirEvidenciaRestricao', TOKEN, idEvidencia);
+    LOOKAHEAD_EDIT_CTX.evidencias = LOOKAHEAD_EDIT_CTX.evidencias.filter(e=>e.ID!==idEvidencia);
+    LOOKAHEAD_EDIT_CTX.restricao.Evidencias = Math.max(0, (LOOKAHEAD_EDIT_CTX.restricao.Evidencias||0) - 1);
+    renderEdicaoRestricaoLookahead_();
+    toast('Evidência excluída.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// "01-07 Out" / "29 Out-04 Nov" (quando a semana cruza o mês) — formato
+// pedido pelo usuário pros cabeçalhos de semana, em vez de só a data de
+// início. Função pura, sem depender de Date pra evitar fuso-horário —
+// opera direto nas partes do ISO (yyyy-mm-dd) já calculado.
+const MESES_ABREV_ = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+function partesIso_(iso){
+  const m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? { ano: +m[1], mes: +m[2], dia: +m[3] } : null;
+}
+function intervaloSemanaCurto_(inicioIso, fimIso){
+  const pi = partesIso_(inicioIso), pf = partesIso_(fimIso);
+  if(!pi || !pf) return '';
+  const di = String(pi.dia).padStart(2,'0'), df = String(pf.dia).padStart(2,'0');
+  if(pi.mes === pf.mes) return di+'-'+df+' '+MESES_ABREV_[pf.mes-1];
+  return di+' '+MESES_ABREV_[pi.mes-1]+'-'+df+' '+MESES_ABREV_[pf.mes-1];
+}
+
+function isoHoje_(){
+  const d = new Date();
+  const p = (n)=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+}
+
+// ── Obras presentes no lookahead (só as que têm restrição — mesma regra
+// do quadro) — alimenta o <select> de filtro e o cabeçalho de impressão. ──
+function obrasNoLookahead_(d){
+  const vistos = {};
+  const lista = [];
+  d.restricoes.forEach(r=>{
+    if(!vistos[r.IDObra]){ vistos[r.IDObra] = true; lista.push({ID: r.IDObra, Titulo: r.TituloObra}); }
+  });
+  return lista.sort((a,b)=>a.Titulo.localeCompare(b.Titulo));
+}
+
+function restricoesFiltradas_(d){
+  if(!LOOKAHEAD_OBRA_FILTRO) return d.restricoes;
+  return d.restricoes.filter(r=>r.IDObra===LOOKAHEAD_OBRA_FILTRO);
+}
+
+// Recalcula a janela de 6 semanas (prontas/bloqueadas) e o % liberado só
+// pra o subconjunto filtrado — os totais que vêm de apiLookahead são do
+// portfólio inteiro, então não servem quando o usuário filtra por obra.
+// Função pura, mesma lógica de janelaLookahead_ (Restricoes.gs) só que
+// operando sobre dados já carregados no cliente (sem round-trip).
+function recalcularJanelaCliente_(restricoesFiltradas, semanasBase){
+  const semanas = semanasBase.map(s=>Object.assign({}, s, {prontas:0, bloqueadas:0}));
+  let naJanela = 0, liberadasNaJanela = 0;
+  restricoesFiltradas.forEach(r=>{
+    if(!r.PrazoNecessario) return;
+    const idx = semanas.findIndex(s=>r.PrazoNecessario>=s.inicioIso && r.PrazoNecessario<=s.fimIso);
+    if(idx<0) return;
+    naJanela++;
+    if(r.Status==='Liberada'){ semanas[idx].prontas++; liberadasNaJanela++; }
+    else semanas[idx].bloqueadas++;
+  });
+  return { semanas: semanas, totalNaJanela: naJanela, pctLiberado: naJanela ? Math.round(liberadasNaJanela/naJanela*100) : null };
+}
+
+function semanaCardHtml_(s, idx){
+  const label = idx===0 ? 'Semana atual' : 'Semana '+(idx+1);
+  return `<div class="cron-resumo-metric" style="text-align:center;min-width:120px">
+    <div style="font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)">${esc(label)}</div>
+    <div style="font-size:15px;font-weight:700;color:var(--navy);margin:4px 0">${intervaloSemanaCurto_(s.inicioIso, s.fimIso)}</div>
+    <div style="display:flex;justify-content:center;gap:10px;font-size:11.5px">
+      <span style="color:var(--teal-dark);font-weight:700">${s.prontas} pronta${s.prontas===1?'':'s'}</span>
+      <span style="color:${s.bloqueadas>0?'var(--danger)':'var(--muted)'};font-weight:700">${s.bloqueadas} bloqueada${s.bloqueadas===1?'':'s'}</span>
+    </div>
+  </div>`;
+}
+
+function acoesRestricaoLookahead_(r){
+  if(r.Status==='Pendente') return '<button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="moverRestricaoLookahead_(\''+esc(r.ID)+'\',\'Em tratamento\')">Tratar</button>';
+  if(r.Status==='Em tratamento') return '<button class="btn btn-teal" style="padding:4px 8px;font-size:11px" onclick="moverRestricaoLookahead_(\''+esc(r.ID)+'\',\'Liberada\')">Liberar</button>';
+  return '<button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="moverRestricaoLookahead_(\''+esc(r.ID)+'\',\'Pendente\')">Reabrir</button>';
+}
+
+function linhaRestricaoLookahead_(r){
+  return `<tr>
+    <td class="td-quem"><b>${esc(r.Atividade)}</b><small>${esc(r.TituloObra)}</small></td>
+    <td>${esc(r.Categoria)}</td>
+    <td style="max-width:260px">${esc(r.Descricao)}</td>
+    <td>${esc(r.ResponsavelNome||'—')}</td>
+    <td style="white-space:nowrap">${r.PrazoNecessario?fmtBr(r.PrazoNecessario):'—'}</td>
+    <td><span class="pill ${pillStatusRestricao_(r.Status)}">${esc(r.Status)}</span></td>
+    <td style="white-space:nowrap">${r.Evidencias?'<span class="ico" style="font-size:14px;color:var(--teal-dark)" title="'+r.Evidencias+' evidência(s)">attach_file</span>'+r.Evidencias:'—'}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="abrirEdicaoRestricaoLookahead_('${esc(r.ID)}')" title="Editar"><span class="ico" style="font-size:14px">edit</span></button>
+      ${acoesRestricaoLookahead_(r)}
+    </td>
+  </tr>`;
+}
+
+function listaRestricoesHtml_(restricoes){
+  let h = `<div class="tab-card depth-card"><div class="tc-head"><h3>Registro de Restrições (${restricoes.length})</h3></div>`;
+  if(!restricoes.length){
+    h += `<p style="color:var(--muted);font-size:13px;padding:18px 22px">Nenhuma restrição cadastrada ainda. Elas são criadas a partir da coluna "Restrição" no cronograma de cada obra.</p></div>`;
+  } else {
+    h += `<div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>Atividade</th><th>Categoria</th><th>Descrição</th><th>Responsável</th><th>Prazo</th><th>Status</th><th>Evid.</th><th></th></tr></thead>
+      <tbody>${restricoes.map(linhaRestricaoLookahead_).join('')}</tbody></table></div></div>`;
+  }
+  return h;
+}
+
+// Post-it individual — fiel à anatomia de referência (linha de prazo com
+// ícone no topo, descrição, responsável com ícone, pill de status no
+// rodapé), cores da paleta do app (não do modelo colado): vermelho
+// Pendente, dourado Em tratamento, teal Liberada.
+function postitCardHtml_(r){
+  const atrasado = r.Status!=='Liberada' && r.PrazoNecessario && r.PrazoNecessario<isoHoje_();
+  const classe = r.Status==='Liberada' ? 'pi-liberada' : r.Status==='Em tratamento' ? 'pi-tratamento' : 'pi-pendente';
+  const icone = r.Status==='Liberada' ? 'check_circle' : 'calendar_clock';
+  const labelPrazo = r.Status==='Liberada' ? 'Resolvido' : 'Prazo';
+  const desc = r.Descricao.length>90 ? esc(r.Descricao.slice(0,90))+'…' : esc(r.Descricao);
+  return `<div class="postit ${classe}${atrasado?' pi-atrasado':''}" role="button" tabindex="0" title="Clique para editar" onclick="abrirEdicaoRestricaoLookahead_('${esc(r.ID)}')" onkeydown="if(event.key==='Enter')abrirEdicaoRestricaoLookahead_('${esc(r.ID)}')">
+    <div class="pi-prazo"><span class="ico">${icone}</span>${labelPrazo}: ${r.PrazoNecessario?fmtBr(r.PrazoNecessario):'sem prazo'}</div>
+    <p class="pi-desc">${desc}</p>
+    ${r.ResponsavelNome?'<div class="pi-resp"><span class="ico">person</span>'+esc(r.ResponsavelNome)+'</div>':''}
+    <div class="pi-foot">
+      <span class="pi-status-pill">${esc(r.Status)}</span>
+      ${r.Evidencias?'<span class="pi-evid"><span class="ico">attach_file</span>'+r.Evidencias+'</span>':''}
+    </div>
+  </div>`;
+}
+
+// Chip de status agregado da linha (atividade) — dado REAL (contagem de
+// impedimentos por status), não % de progresso/efetivo (não temos essa
+// informação no modelo de dados hoje).
+function chipStatusLinhaHtml_(itens){
+  const pendentes = itens.filter(r=>r.Status==='Pendente').length;
+  const tratamento = itens.filter(r=>r.Status==='Em tratamento').length;
+  if(pendentes>0) return `<span class="postit-chip postit-chip-danger">${pendentes} pendente${pendentes>1?'s':''}</span>`;
+  if(tratamento>0) return `<span class="postit-chip postit-chip-gold">${tratamento} em tratamento</span>`;
+  return `<span class="postit-chip postit-chip-ok">Tudo liberado</span>`;
+}
+
+// Quadro (Atividade x Semana) — só entram linhas de pacotes que já têm ao
+// menos 1 restrição, porque o rastreio exige vínculo com atividade real
+// do cronograma (pedido explícito do usuário, não é uma lista solta).
+function quadroRestricoesHtml_(restricoes, semanas){
+  if(!restricoes.length){
+    return `<div class="tab-card depth-card"><p style="color:var(--muted);font-size:13px;padding:18px 22px">Nenhuma restrição cadastrada ainda pra este filtro.</p></div>`;
+  }
+  const porPacote = {};
+  const ordemPacotes = [];
+  restricoes.forEach(r=>{
+    if(!porPacote[r.IDPacote]){ porPacote[r.IDPacote]=[]; ordemPacotes.push(r.IDPacote); }
+    porPacote[r.IDPacote].push(r);
+  });
+
+  const inicioJanela = semanas[0].inicioIso, fimJanela = semanas[5].fimIso;
+  const foraDaJanela = [];
+
+  const linhas = ordemPacotes.map(idPacote=>{
+    const itens = porPacote[idPacote];
+    const nome = itens[0].Atividade;
+    const obraNome = itens[0].TituloObra;
+    const celulas = semanas.map(s=>{
+      const doSemana = itens.filter(r=>r.PrazoNecessario && r.PrazoNecessario>=s.inicioIso && r.PrazoNecessario<=s.fimIso);
+      return `<div class="postit-cell">${doSemana.map(postitCardHtml_).join('')}</div>`;
+    }).join('');
+    itens.filter(r=>!r.PrazoNecessario || r.PrazoNecessario<inicioJanela || r.PrazoNecessario>fimJanela)
+      .forEach(r=>foraDaJanela.push(Object.assign({AtividadeLabel: nome+' — '+obraNome}, r)));
+    return `<div class="postit-row">
+      <div class="postit-rowhead">
+        <b>${esc(nome)}</b><small>${esc(obraNome)}</small>
+        ${chipStatusLinhaHtml_(itens)}
+      </div>
+      ${celulas}
+    </div>`;
+  }).join('');
+
+  const cabecalho = `<div class="postit-row postit-headrow">
+    <div class="postit-rowhead"><span style="font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.85">Atividades</span></div>
+    ${semanas.map((s,i)=>`<div class="postit-colhead"><b>${i===0?'Semana atual':'Semana '+(i+1)}</b><small>${intervaloSemanaCurto_(s.inicioIso, s.fimIso)}</small></div>`).join('')}
+  </div>`;
+
+  const foraHtml = foraDaJanela.length ? `<div class="tab-card depth-card" style="margin-top:14px">
+    <div class="tc-head"><h3>Fora da janela de 6 semanas / sem prazo definido (${foraDaJanela.length})</h3></div>
+    <div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>Atividade</th><th>Descrição</th><th>Responsável</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
+      <tbody>${foraDaJanela.map(r=>`<tr>
+        <td><b>${esc(r.AtividadeLabel)}</b></td>
+        <td style="max-width:260px">${esc(r.Descricao)}</td>
+        <td>${esc(r.ResponsavelNome||'—')}</td>
+        <td style="white-space:nowrap">${r.PrazoNecessario?fmtBr(r.PrazoNecessario):'—'}</td>
+        <td><span class="pill ${pillStatusRestricao_(r.Status)}">${esc(r.Status)}</span></td>
+        <td style="white-space:nowrap"><button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="abrirEdicaoRestricaoLookahead_('${esc(r.ID)}')" title="Editar"><span class="ico" style="font-size:14px">edit</span></button></td>
+      </tr>`).join('')}</tbody></table></div></div>` : '';
+
+  const totalCriticos = restricoes.filter(r=>r.Status==='Pendente').length;
+  const totalTratamento = restricoes.filter(r=>r.Status==='Em tratamento').length;
+  const totalLiberados = restricoes.filter(r=>r.Status==='Liberada').length;
+
+  return `<div class="tab-card depth-card" id="quadroImprimir">
+    <div class="tc-head"><h3>Quadro de Impedimentos — ${ordemPacotes.length} atividade${ordemPacotes.length>1?'s':''}</h3></div>
+    <div class="postit-grid-wrap"><div class="postit-grid">${cabecalho}${linhas}</div></div>
+    <div class="postit-legenda">
+      <span><i class="pi-dot pi-pendente"></i>${totalCriticos} pendente${totalCriticos===1?'':'s'}</span>
+      <span><i class="pi-dot pi-tratamento"></i>${totalTratamento} em tratamento</span>
+      <span><i class="pi-dot pi-liberada"></i>${totalLiberados} liberado${totalLiberados===1?'':'s'}</span>
+      <span class="print-data">Atualizado em: ${fmtBr(isoHoje_())}</span>
+    </div>
+  </div>${foraHtml}`;
+}
+
+function filtroObraHtml_(d){
+  const obras = obrasNoLookahead_(d);
+  const opcoes = ['<option value=""'+(!LOOKAHEAD_OBRA_FILTRO?' selected':'')+'>Todas as obras juntas</option>']
+    .concat(obras.map(o=>'<option value="'+esc(o.ID)+'"'+(LOOKAHEAD_OBRA_FILTRO===o.ID?' selected':'')+'>'+esc(o.Titulo)+'</option>'));
+  return `<select id="lookaheadObraFiltro" onchange="filtrarObraLookahead_(this.value)" style="max-width:260px">${opcoes.join('')}</select>`;
+}
+
+function cabecalhoImpressaoHtml_(d){
+  let nomeCab = 'Hospital da Baleia — Gestão de Obras';
+  if(LOOKAHEAD_OBRA_FILTRO){
+    const obra = obrasNoLookahead_(d).find(o=>o.ID===LOOKAHEAD_OBRA_FILTRO);
+    if(obra) nomeCab = obra.Titulo;
+  }
+  return `<div class="print-only lookahead-print-head">
+    <div class="lph-projeto">${esc(nomeCab)}</div>
+    <h1>Gestão de Impedimentos</h1>
+  </div>`;
+}
+
+function renderLookahead(d){
+  const restricoes = restricoesFiltradas_(d);
+
+  let h = `<div class="pg-header no-print">
+    <div><div class="ph-ctx"><span class="ph-chip">EXECUÇÃO E MONITORAMENTO</span></div>
+    <h2>Lookahead Planning</h2>
+    <p class="ph-desc">Janela móvel de 6 semanas — remoção de impedimentos (restrições) capturadas no Pull Planning.</p></div>
+    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+      ${filtroObraHtml_(d)}
+      <div class="tab-switch" style="margin:0">
+        <button class="${LOOKAHEAD_MODO==='quadro'?'active':''}" onclick="alternarModoLookahead_('quadro')"><span class="ico" style="font-size:16px">view_kanban</span>Quadro</button>
+        <button class="${LOOKAHEAD_MODO==='lista'?'active':''}" onclick="alternarModoLookahead_('lista')"><span class="ico" style="font-size:16px">view_list</span>Lista</button>
+      </div>
+      <button class="btn btn-ghost" onclick="window.print()"><span class="ico">print</span>Imprimir</button>
+    </div>
+  </div>`;
+
+  h += cabecalhoImpressaoHtml_(d);
+
+  if(LOOKAHEAD_MODO==='lista'){
+    const recalc = recalcularJanelaCliente_(restricoes, d.semanas);
+    h += `<div class="no-print"><div class="stat-card depth-card" style="max-width:300px;margin-bottom:16px">
+      <span class="sc-lab">Liberado na janela de 6 semanas</span>
+      <div class="sc-row"><span class="sc-val">${recalc.pctLiberado!=null?recalc.pctLiberado+'%':'—'}</span><span class="ico">verified</span></div>
+      <div style="width:100%;height:6px;background:var(--bg2);border-radius:999px;overflow:hidden;margin-top:8px"><div style="height:100%;background:var(--teal-dark);width:${recalc.pctLiberado||0}%"></div></div>
+      <span style="font-size:10.5px;color:var(--muted);margin-top:6px;display:block">${recalc.totalNaJanela} restriç${recalc.totalNaJanela===1?'ão':'ões'} com prazo necessário nessa janela</span>
+    </div>
+
+    <div class="card"><h2><span class="ico">calendar_view_week</span>Janela de 6 semanas</h2>
+      <div style="overflow-x:auto"><div style="display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px;margin-top:10px">
+        ${recalc.semanas.map((s,i)=>semanaCardHtml_(s,i)).join('')}
+      </div></div></div></div>`;
+    h += listaRestricoesHtml_(restricoes);
+  } else {
+    h += quadroRestricoesHtml_(restricoes, d.semanas);
+  }
+
+  renderShell('lookahead', h, true);
+}
+</script>

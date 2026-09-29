@@ -1,0 +1,74 @@
+<script>
+// ═══════════════════════════ LOGIN (admin) ═══════════════════════════
+// Sessão individual por e-mail+senha (Auth.gs). O que fica no navegador
+// é só o TOKEN de sessão (nunca a senha) + nome/papel pra montar a UI —
+// o servidor revalida o token em toda chamada, então adulterar o papel
+// no sessionStorage não dá acesso a nada.
+let TOKEN = sessionStorage.getItem('obrasHbToken')||'';
+let PAPEL = sessionStorage.getItem('obrasHbPapel')||'';
+let NOME  = sessionStorage.getItem('obrasHbNome')||'';
+let CARGO = sessionStorage.getItem('obrasHbCargo')||'';
+
+function initAdmin(){
+  if(TOKEN && PAPEL){ renderHome(); } else { renderLogin(); }
+}
+
+function limparSessao_(){
+  ['obrasHbToken','obrasHbPapel','obrasHbNome','obrasHbCargo'].forEach(k=>sessionStorage.removeItem(k));
+  TOKEN='';PAPEL='';NOME='';CARGO='';
+}
+
+// Chamada pelos handlers de erro das telas: se a mensagem indica sessão
+// expirada/inválida, volta pro login em vez de só mostrar toast.
+function tratarErroSessao(e){
+  if(/sessão (expirada|inválida)/i.test(e.message)){
+    limparSessao_();renderLogin();toast(e.message);
+    return true;
+  }
+  return false;
+}
+
+function renderLogin(){
+  app(`<div style="max-width:400px;margin:60px auto">
+    <div class="card" style="text-align:center;padding:34px 28px">
+      <img src="${LOGO_HB}" alt="Hospital da Baleia" style="height:44px;margin:0 auto 14px;display:block">
+      <div class="eyebrow">Hospital da Baleia · Engenharia e PMO</div>
+      <h1 style="font-size:20px;margin:8px 0 4px">Gestão Estratégica de Projetos | PMO</h1>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:18px">Projetos e obras · acesso individual</p>
+      <input type="email" id="loginEmail" placeholder="e-mail institucional" autocomplete="username" style="margin-bottom:8px" onkeydown="if(event.key==='Enter')$('loginSenha').focus()">
+      <input type="password" id="loginSenha" placeholder="senha" autocomplete="current-password" onkeydown="if(event.key==='Enter')fazerLogin()">
+      <button class="btn btn-primary" id="btnLogin" style="width:100%;justify-content:center;margin-top:12px" onclick="fazerLogin()"><span class="ico">lock_open</span>Entrar</button>
+      <p id="loginErr" style="color:var(--danger);font-size:12px;margin-top:10px;display:none"></p>
+    </div>
+    <p class="footer-note">Sem acesso? Peça ao PMO para ativar o seu login.</p>
+  </div>`);
+  $('loginEmail').focus();
+}
+
+async function fazerLogin(){
+  const email = $('loginEmail').value.trim();
+  const senha = $('loginSenha').value;
+  if(!email || !senha){marcarErro([email?'loginSenha':'loginEmail']);return;}
+  const btn=$('btnLogin');btn.disabled=true;btn.innerHTML='<span class="ico">hourglass_top</span>Entrando…';
+  try{
+    const r = await gs('login', email, senha);
+    TOKEN=r.token; PAPEL=r.papel; NOME=r.nome; CARGO=r.cargo||'';
+    sessionStorage.setItem('obrasHbToken',TOKEN);
+    sessionStorage.setItem('obrasHbPapel',PAPEL);
+    sessionStorage.setItem('obrasHbNome',NOME);
+    sessionStorage.setItem('obrasHbCargo',CARGO);
+    renderHome();
+  }catch(e){
+    const el=$('loginErr');el.textContent=e.message;el.style.display='block';
+    btn.disabled=false;btn.innerHTML='<span class="ico">lock_open</span>Entrar';
+  }
+}
+
+async function fazerLogout(){
+  const t=TOKEN;
+  limparSessao_();
+  renderLogin();
+  // invalida no servidor também, sem bloquear a UI se falhar
+  if(t){ try{ await gs('logout', t); }catch(e){} }
+}
+</script>

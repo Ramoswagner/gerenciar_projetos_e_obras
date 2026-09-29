@@ -1,0 +1,202 @@
+<script>
+// ═══════════════════════════ PEDIDOS (admin) ═══════════════════════════
+// Estrutura fiel ao modelo "4 manifestacoes acompanhamento": faixa de
+// stats com divisores, cards com avatar de iniciais + chip de status
+// maiúsculo (ícone preenchido), grid 8/4 com painel lateral sticky de
+// distribuição. Paleta do sistema; sem borda-esquerda em linha.
+
+ROTAS['pedidos'] = carregarListaPedidos;
+
+let PEDIDOS_CACHE = null;
+let FILTRO_PEDIDOS = '';
+
+const PEDIDO_STATUS_META = {
+  'Novo':                        {cor:'var(--info)',   bg:'var(--info-bg)',   txt:'#1E40AF', ico:'new_releases'},
+  'Em análise':                  {cor:'var(--gold)',   bg:'var(--gold-bg)',   txt:'#92400E', ico:'hourglass_top'},
+  'Aguardando mais informações': {cor:'#94A3B8',       bg:'var(--bg2)',       txt:'#475569', ico:'help'},
+  'Aceito':                      {cor:'var(--ok)',     bg:'var(--ok-bg)',     txt:'#065F46', ico:'check_circle'},
+  'Recusado':                    {cor:'var(--danger)', bg:'var(--danger-bg)', txt:'#991B1B', ico:'cancel'},
+  'Cancelado':                   {cor:'#6B7280',       bg:'#F3F4F6',          txt:'#374151', ico:'block'}
+};
+
+function chipPedido(status){
+  const m = PEDIDO_STATUS_META[status]||{bg:'var(--bg2)',txt:'var(--muted)',ico:'radio_button_unchecked'};
+  return `<span class="chip-status" style="background:${m.bg};color:${m.txt}"><span class="ico ico-fill">${m.ico}</span>${esc(status)}</span>`;
+}
+
+function iniciais_(nome){
+  const p = String(nome||'').trim().split(/\s+/);
+  return ((p[0]||' ')[0]+(p.length>1?p[p.length-1][0]:'')).toUpperCase();
+}
+
+// Stale-while-revalidate: se já temos a lista em memória, renderiza na
+// hora (zero espera percebida) e atualiza por baixo — só re-renderiza se
+// o dado mudou de verdade.
+async function carregarListaPedidos(){
+  const tinhaCache = !!PEDIDOS_CACHE;
+  if(tinhaCache){ renderListaPedidos(); } else { skeleton('lista'); }
+  try{
+    const frescos = await gs('apiListarPedidos', TOKEN);
+    const mudou = JSON.stringify(frescos)!==JSON.stringify(PEDIDOS_CACHE);
+    PEDIDOS_CACHE = frescos;
+    if(!tinhaCache || (mudou && NAV_ATIVO==='pedidos')) renderListaPedidos();
+  }catch(e){
+    if(!tratarErroSessao(e)&&!tinhaCache)toast(e.message);
+  }
+}
+
+async function copiarLinkPedidos(){
+  try{
+    const r = await gs('apiLinkNovoPedido', TOKEN);
+    copiar(r.link,'Link copiado! Envie para quem quiser solicitar uma obra.');
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+function renderListaPedidos(){
+  const pedidos = PEDIDOS_CACHE||[];
+  const porStatus = {};
+  pedidos.forEach(p=>{porStatus[p.Status]=(porStatus[p.Status]||0)+1;});
+  const ordemStatus = ['Novo','Em análise','Aguardando mais informações','Aceito','Recusado','Cancelado']
+    .filter(s=>porStatus[s]);
+  const visiveis = FILTRO_PEDIDOS ? pedidos.filter(p=>p.Status===FILTRO_PEDIDOS) : pedidos;
+
+  // Cabeçalho no padrão do modelo GovHosp: contexto + título + ações à direita
+  let h = `<div class="pg-header">
+    <div>
+      <div class="ph-ctx"><span class="ph-chip">INICIAÇÃO</span><span style="font-size:11px;color:var(--muted)">Hospital da Baleia · Engenharia e PMO</span></div>
+      <h2>Pedidos de obra</h2>
+      <p class="ph-desc">Solicitações das áreas do hospital — análise, conversa com o solicitante e conversão em obra formal.</p>
+    </div>
+    <button class="btn btn-primary" onclick="copiarLinkPedidos()"><span class="ico" style="font-size:17px">forum</span>Copiar link para pedidos</button>
+  </div>`;
+
+  if(!pedidos.length){
+    h += `<div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">inbox</span>
+      <h2 style="justify-content:center;margin-top:10px">Nenhum pedido recebido</h2>
+      <p style="color:var(--muted)">Copie o link público e envie para quem quiser solicitar uma obra à Engenharia.</p></div>`;
+    renderShell('pedidos', h);
+    return;
+  }
+
+  // 3 stat-cards (modelo GovHosp), clicáveis = filtro
+  const nNovos = porStatus['Novo']||0;
+  const nAguard = porStatus['Aguardando mais informações']||0;
+  h += `<div class="stat-grid">
+    <div class="stat-card depth-card${FILTRO_PEDIDOS===''?'':''}" style="cursor:pointer" onclick="FILTRO_PEDIDOS='';renderListaPedidos()">
+      <span class="sc-lab">Total de pedidos</span>
+      <div class="sc-row"><span class="sc-val">${String(pedidos.length).padStart(2,'0')}</span><span class="ico">groups</span></div>
+    </div>
+    <div class="stat-card depth-card" style="cursor:pointer" onclick="FILTRO_PEDIDOS='Novo';renderListaPedidos()">
+      <span class="sc-lab">Novos (sem análise)</span>
+      <div class="sc-row"><span class="sc-val" style="color:var(--info)">${String(nNovos).padStart(2,'0')}</span><span class="ico" style="color:var(--info)">new_releases</span></div>
+    </div>
+    <div class="stat-card depth-card" style="cursor:pointer" onclick="FILTRO_PEDIDOS='Aguardando mais informações';renderListaPedidos()">
+      <span class="sc-lab">Aguardando o solicitante</span>
+      <div class="sc-row"><span class="sc-val" style="color:#B45309">${String(nAguard).padStart(2,'0')}</span><span class="ico" style="color:var(--gold)">hourglass_top</span></div>
+    </div>
+  </div>`;
+
+  // tabela densa (modelo GovHosp)
+  let linhas='';
+  visiveis.forEach(p=>{
+    linhas += `<tr onclick="abrirDetalhePedido('${esc(p.ID)}')">
+      <td class="td-quem"><b>${esc(p.Nome)}</b><small>${esc(p.Cargo||'—')}</small></td>
+      <td>${esc(p.Area)}</td>
+      <td>${chipPedido(p.Status)}</td>
+      <td class="td-trunc" title="${esc(p.Finalidade||'')}">${esc(p.Finalidade||'—')}</td>
+      <td style="white-space:nowrap;color:var(--muted);font-size:12px">${esc((p.CriadoEm||'').slice(0,10).split('-').reverse().join('/'))}</td>
+    </tr>`;
+  });
+  if(!visiveis.length){
+    linhas = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:26px">Nenhum pedido com o filtro "${esc(FILTRO_PEDIDOS)}".</td></tr>`;
+  }
+  h += `<div class="tab-card depth-card">
+    <div class="tc-head"><h3>Relatório de pedidos${FILTRO_PEDIDOS?' · '+esc(FILTRO_PEDIDOS):''}</h3>
+      ${FILTRO_PEDIDOS?'<button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="FILTRO_PEDIDOS=\'\';renderListaPedidos()"><span class="ico" style="font-size:15px">filter_list_off</span>Limpar filtro</button>':'<span style="font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:4px"><span class="ico" style="font-size:15px">filter_list</span>Clique num cartão acima para filtrar</span>'}
+    </div>
+    <div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>Solicitante</th><th>Área / Depto</th><th>Status</th><th>Finalidade</th><th>Data</th></tr></thead>
+      <tbody>${linhas}</tbody>
+    </table></div>
+  </div>`;
+  renderShell('pedidos', h, true);
+}
+
+async function abrirDetalhePedido(id){
+  skeleton('detalhe');
+  try{
+    const d = await gs('apiGetPedidoAdmin', TOKEN, id);
+    renderDetalhePedido(d);
+  }catch(e){if(!tratarErroSessao(e)){toast(e.message);carregarListaPedidos();}}
+}
+
+function renderDetalhePedido(d){
+  const p = d.pedido;
+  let h = shellHero('Pedidos','carregarListaPedidos()',esc(p.ID),
+    esc(p.Nome)+' · '+esc(p.Area)+' <span style="vertical-align:middle;margin-left:10px">'+chipPedido(p.Status)+'</span>',
+    '<button class="btn btn-ghost" onclick="carregarListaPedidos()"><span class="ico">arrow_back</span>Voltar</button>')
+  + `<div class="card"><h2><span class="ico">badge</span>Solicitante</h2>
+    <div style="display:flex;gap:12px;align-items:center">
+      <span class="avatar-ini">${esc(iniciais_(p.Nome))}</span>
+      <p style="font-size:13.5px"><b>${esc(p.Nome)}</b> · ${esc(p.Cargo)}<br>${esc(p.Contato)}<br>${esc(p.Area)}${p.SuperintendenciaGestora?' · '+esc(p.SuperintendenciaGestora):''}${p.CentroCusto?' · CC '+esc(p.CentroCusto):''}</p>
+    </div>
+  </div>
+
+  <div class="card"><h2><span class="ico">domain</span>A obra pretendida</h2>
+    <p style="font-size:12.5px;color:var(--muted)">Local desejado</p><p style="font-size:13.5px;margin-bottom:10px">${esc(p.SetorDesejado||'—')}</p>
+    <p style="font-size:12.5px;color:var(--muted)">Finalidade / objetivo</p><p style="font-size:13.5px;white-space:pre-wrap">${renderMarkdownLite(p.FinalidadeObjetivo)}</p>
+    ${p.Ambientes?'<p style="font-size:12.5px;color:var(--muted);margin-top:10px">Ambientes desejados</p><p style="font-size:13.5px;white-space:pre-wrap">'+renderMarkdownLite(p.Ambientes)+'</p>':''}
+    ${p.Equipamentos?'<p style="font-size:12.5px;color:var(--muted);margin-top:10px">Equipamentos</p><p style="font-size:13.5px;white-space:pre-wrap">'+renderMarkdownLite(p.Equipamentos)+'</p>':''}
+    ${p.PopulacaoEstimada?'<p style="font-size:12.5px;color:var(--muted);margin-top:10px">População estimada</p><p style="font-size:13.5px">'+esc(p.PopulacaoEstimada)+'</p>':''}
+    ${p.Anexos?'<p style="margin-top:10px"><a href="'+esc(p.Anexos)+'" target="_blank" rel="noopener" style="color:var(--teal-dark);font-weight:600;font-size:12.5px">📎 Ver anexo/referência</a></p>':''}
+  </div>
+
+  <div class="card"><h2><span class="ico">schedule</span>Prazo</h2>
+    <p style="font-size:13.5px"><b>${esc(p.Urgencia)}</b>${p.DataDesejada?' · data desejada: '+fmtBr(p.DataDesejada):''}</p>
+    ${p.JustificativaUrgencia?'<p style="font-size:13px;margin-top:6px;white-space:pre-wrap">'+renderMarkdownLite(p.JustificativaUrgencia)+'</p>':''}
+  </div>
+
+  <div class="card"><h2><span class="ico">forum</span>Link de acompanhamento do solicitante</h2>
+    <div class="linkbox"><span class="ico" style="color:var(--teal-dark)">link</span><span style="flex:1">${esc(d.linkAcompanhamento)}</span></div>
+    <button class="btn btn-ghost" style="margin-top:8px" onclick="copiar('${esc(d.linkAcompanhamento)}','Link copiado!')"><span class="ico">content_copy</span>Copiar link</button>
+  </div>
+
+  ${d.historico&&d.historico.length?`<div class="card"><h2><span class="ico">forum</span>Histórico da conversa (${d.historico.length})</h2>${historicoHtml(d.historico)}</div>`:''}
+
+  <div class="card"><h2><span class="ico">edit_note</span>Análise da Engenharia</h2>
+    <label>Observações <small>— visíveis para o solicitante na página de acompanhamento</small></label>
+    <textarea id="pedObs" maxlength="2000">${esc(p.ObservacoesEngenharia)}</textarea>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      ${p.Status!=='Em análise'?'<button class="btn btn-ghost" onclick="mudarStatusPedido(\''+esc(p.ID)+'\',\'Em análise\')">Marcar em análise</button>':''}
+      ${p.Status!=='Aguardando mais informações'?'<button class="btn btn-ghost" onclick="mudarStatusPedido(\''+esc(p.ID)+'\',\'Aguardando mais informações\')">Pedir mais informações</button>':''}
+      ${p.Status!=='Recusado'?'<button class="btn btn-danger" onclick="mudarStatusPedido(\''+esc(p.ID)+'\',\'Recusado\')">Recusar pedido</button>':''}
+    </div>
+    ${p.Status==='Aceito'&&p.IDObraGerada?
+      '<div class="banner banner-ok" style="margin-top:14px"><span class="ico">task_alt</span><span>Já convertido na obra <b>'+esc(p.IDObraGerada)+'</b>. <a href="#" onclick="abrirObraDePedido(\''+esc(p.IDObraGerada)+'\');return false" style="color:var(--teal-dark);font-weight:700">Abrir obra →</a></span></div>'
+      :'<div style="margin-top:14px"><button class="btn btn-teal" onclick="converterPedidoEmObra(\''+esc(p.ID)+'\')"><span class="ico">construction</span>Aceitar e converter em obra</button></div>'}
+  </div>`;
+  renderShell('pedidos', h);
+  attachFormatToolbar('pedObs');
+}
+
+async function mudarStatusPedido(id, novoStatus){
+  const obs = $('pedObs') ? $('pedObs').value : '';
+  try{
+    await gs('apiAtualizarStatusPedido', TOKEN, id, novoStatus, obs);
+    toast('Status atualizado: '+novoStatus);
+    PEDIDOS_CACHE = null; // força recarregar a lista com o dado novo
+    abrirDetalhePedido(id);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+// As duas funções abaixo dependem do módulo Obras (fase seguinte) — os
+// pontos de integração já existem; até lá, avisam em vez de quebrar.
+function abrirObraDePedido(idObra){
+  if(typeof abrirDetalhe==='function'){abrirDetalhe(idObra);}
+  else toast('A tela de Obras será ativada na próxima fase da construção.');
+}
+async function converterPedidoEmObra(id){
+  if(typeof renderFormObraDePedido==='function'){renderFormObraDePedido(id);}
+  else toast('A conversão em obra será ativada junto com o módulo Obras, na próxima fase.');
+}
+</script>

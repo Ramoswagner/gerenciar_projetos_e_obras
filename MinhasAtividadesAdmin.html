@@ -1,0 +1,74 @@
+<script>
+// ═══════════════════════════ MINHAS ATIVIDADES (Fase 11 — papel Responsável) ═══════════════════════════
+// Única tela visível pro papel Responsável (sidebar reduzida de
+// propósito, ver Shell.html). Lista só os pacotes vinculados a este
+// usuário (ResponsavelUserId) em qualquer obra, com checkoff simples —
+// toda a validação de posse (é mesmo o dono deste pacote?) acontece no
+// SERVIDOR (apiCheckoffPacote), nunca confiada só nesta tela.
+
+ROTAS['minhasatividades'] = carregarMinhasAtividades;
+
+let MEUS_PACOTES = null;
+
+async function carregarMinhasAtividades(){
+  skeleton('lista');
+  try{
+    MEUS_PACOTES = await gs('apiMeusPacotes', TOKEN);
+    renderMinhasAtividades();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function pillStatusPacoteResp_(status){
+  if(status==='Concluída') return 'pill-liberada';
+  if(status==='Em andamento') return 'pill-encerrada';
+  return 'pill-rascunho';
+}
+
+function acoesCheckoff_(p){
+  if(p.Status==='Não iniciada') return '<button class="btn btn-teal" style="padding:4px 10px;font-size:12px" onclick="checkoffPacote_(\''+esc(p.ID)+'\',\'Em andamento\')"><span class="ico" style="font-size:15px">play_arrow</span>Iniciar</button>';
+  if(p.Status==='Em andamento') return '<button class="btn btn-teal" style="padding:4px 10px;font-size:12px" onclick="checkoffPacote_(\''+esc(p.ID)+'\',\'Concluída\')"><span class="ico" style="font-size:15px">check</span>Concluir</button>'+
+    '<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="checkoffPacote_(\''+esc(p.ID)+'\',\'Não iniciada\')">Voltar</button>';
+  return '<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="checkoffPacote_(\''+esc(p.ID)+'\',\'Em andamento\')">Reabrir</button>';
+}
+
+function cardMeuPacote_(p){
+  return `<div class="tab-card depth-card" style="margin-bottom:12px">
+    <div style="padding:16px 18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <b style="font-size:14.5px;color:var(--navy)">${esc(p.Atividade)}</b>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">${esc(p.TituloObra)} · ${p.DataInicioPrevista?fmtBr(p.DataInicioPrevista):'—'} a ${p.DataFimPrevista?fmtBr(p.DataFimPrevista):'—'}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="pill ${pillStatusPacoteResp_(p.Status)}">${esc(p.Status)}</span>
+        ${acoesCheckoff_(p)}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderMinhasAtividades(){
+  let h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">MINHAS ATIVIDADES</span></div>
+    <h2>Minhas Atividades</h2>
+    <p class="ph-desc">Pacotes de trabalho sob sua responsabilidade — marque o andamento conforme executa.</p></div>
+  </div>`;
+
+  if(!MEUS_PACOTES.length){
+    h += `<div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">construction</span>
+      <h2 style="justify-content:center;margin-top:10px">Nenhuma atividade vinculada ainda</h2>
+      <p style="color:var(--muted);max-width:460px;margin:6px auto 0">Peça à Engenharia/PMO pra vincular você como responsável de um pacote no cronograma da obra.</p></div>`;
+  } else {
+    h += MEUS_PACOTES.map(cardMeuPacote_).join('');
+  }
+
+  renderShell('minhasatividades', h, true);
+}
+
+async function checkoffPacote_(idPacote, novoStatus){
+  try{
+    await gs('apiCheckoffPacote', TOKEN, idPacote, novoStatus);
+    toast('Status atualizado: '+novoStatus);
+    await carregarMinhasAtividades();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+</script>

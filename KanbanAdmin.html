@@ -1,0 +1,115 @@
+<script>
+// ═══════════════════════ PAINEL DE CONTROLE (Kanban unificado) ═══════════════════════
+// Fiel à anatomia do modelo "painel_do_pmo_governan_a_de_obras" (modelos 2):
+// colunas por fase numerada, sub-fases como rótulos dentro da coluna,
+// cartões densos. Bucket vem pronto do servidor (apiKanban/Kanban.gs) —
+// aqui só agrupa e desenha.
+
+ROTAS['painel'] = carregarKanban;
+
+// Espelho client-side de KANBAN_FASES (Kanban.gs) — só pra ordenar as
+// colunas na tela; a classificação de verdade é sempre feita no servidor.
+const KANBAN_FASES_CLIENTE = ['Pedido','Manifestação','Cronograma','Validado','Execução','Encerramento'];
+
+// Stale-while-revalidate (mesmo padrão de Pedidos/Obras): com cache em
+// memória, renderiza na hora e atualiza por baixo — só re-renderiza de
+// novo se o dado mudou de verdade.
+let KANBAN_CACHE = null;
+async function carregarKanban(){
+  const tinhaCache = !!KANBAN_CACHE;
+  if(tinhaCache){ renderKanban(KANBAN_CACHE); } else { skeleton('lista'); }
+  try{
+    const frescos = await gs('apiKanban', TOKEN);
+    const mudou = JSON.stringify(frescos)!==JSON.stringify(KANBAN_CACHE);
+    KANBAN_CACHE = frescos;
+    if(!tinhaCache || (mudou && NAV_ATIVO==='painel')) renderKanban(frescos);
+  }catch(e){ if(!tratarErroSessao(e)&&!tinhaCache) toast(e.message); }
+}
+
+function pillUrgenciaCurta_(u){
+  if(u && u.indexOf('Urgente')===0) return '<span class="pill pill-recusado" style="font-size:9.5px">URGENTE</span>';
+  return '';
+}
+
+function kanbanCardPedido_(p){
+  return `<div class="kanban-card" onclick="abrirDetalhePedido('${esc(p.ID)}')">
+    <div class="kanban-card-top"><span class="kanban-card-id">${esc(p.ID)}</span>${pillUrgenciaCurta_(p.Urgencia)}</div>
+    <div class="kanban-card-titulo">${esc(p.Titulo)}</div>
+    <div class="kanban-card-meta"><span class="ico">apartment</span>${esc(p.Area||'—')}</div>
+  </div>`;
+}
+
+function kanbanCardObra_(o){
+  const prog = o.progresso;
+  return `<div class="kanban-card" onclick="abrirDetalhe('${esc(o.ID)}')">
+    <div class="kanban-card-top"><span class="kanban-card-id">${esc(o.ID)}</span>${chipObra(o.Status)}</div>
+    <div class="kanban-card-titulo">${esc(o.Titulo)}</div>
+    <div class="kanban-card-meta"><span class="ico">domain</span>${esc(o.Setor||'—')}</div>
+    ${prog!=null?`<div class="kanban-card-prog"><div class="kanban-card-prog-row"><span>Pacotes concluídos</span><span>${prog}%</span></div><div class="kanban-card-prog-bar"><div class="kanban-card-prog-fill" style="width:${prog}%"></div></div></div>`:''}
+  </div>`;
+}
+
+// Agrupa uma lista (pedidos+obras já classificados) por sub-fase,
+// preservando a ordem de 1ª aparição — evita depender de object-key-order.
+function kanbanAgruparSubfases_(itens){
+  const ordem = [], porSub = {};
+  itens.forEach(it=>{
+    if(!porSub[it.subfase]){ porSub[it.subfase]=[]; ordem.push(it.subfase); }
+    porSub[it.subfase].push(it);
+  });
+  return { ordem, porSub };
+}
+
+function kanbanColunaHtml_(titulo, numero, itens){
+  const rotulo = numero ? (numero+'. '+titulo) : titulo;
+  let h = `<div class="kanban-col">
+    <div class="kanban-col-head"><h3>${esc(rotulo)}</h3><span class="kanban-col-count">${itens.length}</span></div>
+    <div class="kanban-col-body">`;
+  if(!itens.length){
+    h += `<div class="kanban-empty"><span class="ico">inbox</span><small>Nenhum item nesta fase</small></div>`;
+  } else {
+    const {ordem, porSub} = kanbanAgruparSubfases_(itens);
+    ordem.forEach(sf=>{
+      h += `<div class="kanban-subfase">${esc(sf)}</div>`;
+      porSub[sf].forEach(it => h += it.tipo==='pedido' ? kanbanCardPedido_(it) : kanbanCardObra_(it));
+    });
+  }
+  h += `</div></div>`;
+  return h;
+}
+
+function kanbanBoardHtml_(d){
+  const porBucket = {};
+  KANBAN_FASES_CLIENTE.forEach(f=>porBucket[f]=[]);
+  (d.pedidos||[]).forEach(p=>{ if(porBucket[p.bucket]) porBucket[p.bucket].push(p); });
+  (d.obras||[]).forEach(o=>{ if(porBucket[o.bucket]) porBucket[o.bucket].push(o); });
+
+  let html = '<div class="kanban-board">';
+  KANBAN_FASES_CLIENTE.forEach((fase,i)=>{ html += kanbanColunaHtml_(fase, i+1, porBucket[fase]); });
+  html += '</div>';
+
+  // Cancelado/Recusado — saída paralela do fluxo principal, seção própria
+  // recolhida por padrão pra não poluir a visão do dia a dia.
+  const paralelos = (d.pedidos||[]).concat(d.obras||[]).filter(it=>it.bucket==='Cancelado'||it.bucket==='Recusado');
+  if(paralelos.length){
+    html += `<details class="card" style="margin-top:16px">
+      <summary style="cursor:pointer;font-weight:700;color:var(--navy);display:flex;align-items:center;gap:8px;list-style:none"><span class="ico">block</span>Cancelados e recusados (${paralelos.length})</summary>
+      <div class="kanban-board" style="margin-top:12px">`;
+    ['Cancelado','Recusado'].forEach(fase=>{
+      const itens = paralelos.filter(it=>it.bucket===fase);
+      if(itens.length) html += kanbanColunaHtml_(fase, 0, itens);
+    });
+    html += `</div></details>`;
+  }
+  return html;
+}
+
+function renderKanban(d){
+  const h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">GESTÃO</span></div>
+    <h2>Painel de Controle</h2>
+    <p class="ph-desc">Visão unificada do ciclo de vida das obras — do pedido ao encerramento.</p></div>
+  </div>` + kanbanBoardHtml_(d);
+  renderShell('painel', h, true);
+}
+</script>

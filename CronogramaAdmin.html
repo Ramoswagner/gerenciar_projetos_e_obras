@@ -1,0 +1,916 @@
+<script>
+// ═══════════════ CRONOGRAMA MESTRE (editor + Gantt + validação PMO) ═══════════════
+// Editor fiel ao modelo 3: tiles de resumo vivos, etapas como containers
+// com faixa-cabeçalho (datas/custo calculados) e tabela editável densa.
+// Contrato de save idêntico ao sistema atual (EtapaIdx/PredecessoraIdx
+// por posição, resolvidos pra ID no servidor). Numeração nunca gravada.
+
+let CRON_OBRA = null;
+let ETAPA_SEQ = 0, PACOTE_SEQ = 0, PACOTE_ID_TO_SEQ = {};
+// Riscos cadastrados por pacote (ID real do pacote -> array de riscos),
+// carregado junto com o cronograma. TemRisco no Cronograma é só um
+// espelho calculado no servidor a partir daqui — o popup de riscos é a
+// fonte de verdade.
+let RISCOS_POR_PACOTE = {};
+// Restrições (impedimentos Make Ready) por pacote — mesmo princípio,
+// distinto de Risco (risco é potencial futuro; restrição já bloqueia o
+// pacote de estar pronto pra execução agora).
+let RESTRICOES_POR_PACOTE = {};
+// Evidências de solução (N arquivos por restrição), agrupadas por ID da
+// restrição — carregadas junto com o cronograma (CRON_OBRA.evidenciasRestricao).
+let EVIDENCIAS_POR_RESTRICAO = {};
+
+// Alterações no editor (digitar, marcar risco, adicionar/remover
+// etapa/pacote) são só LOCAIS até "Salvar rascunho"/"Salvar e enviar".
+// Se o usuário der F5 ou fechar a aba nesse meio-tempo, tudo que não foi
+// salvo se perde (comportamento normal de qualquer formulário web) — o
+// que já foi confundido com "duplicação que desfaz sozinha". Este aviso
+// nativo do navegador evita a perda acidental.
+let CRON_SUJO = false;
+function marcarCronSujo_(){ CRON_SUJO = true; }
+window.addEventListener('beforeunload', function(e){
+  if(CRON_SUJO){ e.preventDefault(); e.returnValue=''; }
+});
+
+// Trava de reentrância: sem isso, um clique duplo em "Abrir cronograma"
+// (ou o reload pós-salvar coincidindo com um novo clique) dispara duas
+// chamadas assíncronas em paralelo — a 2ª renderCronograma() recria o
+// #etapasContainer, mas se a 1ª ainda estiver no meio de popular os
+// pacotes quando isso acontece, os dois conjuntos acabam sendo anexados
+// no MESMO container, duplicando cada pacote na tela. Isso é o que
+// provavelmente causou a "proliferação" — o dado duplicado na TELA foi
+// salvo de verdade, dobrando de novo a cada reabertura.
+let CRON_CARREGANDO = false;
+async function abrirCronograma(idObra){
+  if(CRON_CARREGANDO) return; // ignora chamada repetida enquanto a 1ª ainda está em voo
+  CRON_CARREGANDO = true;
+  loading('Carregando cronograma…');
+  try{
+    const d = await gs('apiGetObraAdmin', TOKEN, idObra);
+    renderCronograma(d);
+  }catch(e){if(!tratarErroSessao(e)){toast(e.message);abrirDetalhe(idObra);}}
+  finally{ CRON_CARREGANDO = false; }
+}
+
+function pillCron_(sc){
+  return sc==='Validado'?'pill-liberada':sc==='Revisão solicitada'?'pill-recusado':sc==='Aguardando validação'?'pill-encerrada':'pill-rascunho';
+}
+
+function renderCronograma(d){
+  CRON_OBRA = d;
+  const o = d.obra;
+  const sc = o.StatusCronograma||'Rascunho';
+  let h = `<div class="pg-header">
+    <div>
+      <div class="ph-ctx"><span class="ph-chip">PLANEJAMENTO</span><span class="ref-code">${esc(o.ID)}</span><span class="pill ${pillCron_(sc)}">${esc(sc)}</span></div>
+      <h2>Cronograma Mestre</h2>
+      <p class="ph-desc">${esc(o.Titulo)} — atividades, responsáveis, riscos e orçamento base (Pull Planning).</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost" onclick="abrirDetalhe('${esc(o.ID)}')"><span class="ico">arrow_back</span>Voltar</button>
+      <button class="btn btn-ghost" onclick="abrirGanttObra()"><span class="ico">timeline</span>Ver Gantt</button>
+      <button class="btn btn-ghost" id="btnRascunhoCron" onclick="salvarCronograma('${esc(o.ID)}', false)"><span class="ico" style="font-size:16px">save</span>Salvar rascunho</button>
+      <button class="btn btn-primary" id="btnEnviarCron" onclick="salvarCronograma('${esc(o.ID)}', true)"><span class="ico" style="font-size:16px">send</span>Salvar e enviar para validação</button>
+    </div>
+  </div>
+
+  <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
+    <div class="stat-card depth-card"><span class="sc-lab">Duração total</span><div class="sc-row"><span class="sc-val" id="rgDias">—</span><span class="ico">calendar_month</span></div><span style="font-size:10.5px;color:var(--muted)" id="rgTermino">sem datas ainda</span></div>
+    <div class="stat-card depth-card"><span class="sc-lab">Custo estimado (global)</span><div class="sc-row"><span class="sc-val" id="rgCusto" style="font-size:22px">R$ 0,00</span><span class="ico">payments</span></div></div>
+    <div class="stat-card depth-card"><span class="sc-lab">Pacotes de trabalho</span><div class="sc-row"><span class="sc-val" id="rgPacotes">0</span><span class="ico">inventory_2</span></div></div>
+    <div class="stat-card depth-card" style="border-left:4px solid var(--gold)"><span class="sc-lab">Riscos mapeados</span><div class="sc-row"><span class="sc-val" id="rgRiscos" style="color:#B45309">0</span><span class="ico" style="color:var(--gold)">warning</span></div></div>
+  </div>
+
+  ${sc==='Revisão solicitada'&&o.CronogramaObservacoesPMO?'<div class="banner banner-warn"><span class="ico">warning</span><span><b>Revisão solicitada pelo PMO:</b> '+renderMarkdownLite(o.CronogramaObservacoesPMO)+'</span></div>':''}
+  ${sc==='Validado'?'<div class="banner banner-ok"><span class="ico">verified</span><span>Validado por '+esc(o.CronogramaValidadoPor)+' em '+esc((o.CronogramaValidadoEm||'').replace('T',' · '))+'. <b>Editar e salvar de novo volta o status para "Revisão solicitada".</b></span></div>':''}
+
+  <div id="etapasContainer"></div>
+  <div class="add-etapa-zone" onclick="novaEtapa()">
+    <span class="aez-ico"><span class="ico" style="font-size:26px">add_box</span></span>
+    <b>Nova etapa de construção</b>
+    <span style="font-size:12.5px">Clique para definir um novo bloco lógico no cronograma</span>
+  </div>`;
+
+  if(PAPEL==='PMO' && (d.cronograma||[]).length){
+    h += `<div class="card" id="validacaoCronWrap" style="margin-top:18px">
+      <h2><span class="ico">verified</span>Validação do PMO</h2>
+      <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Status atual: <span class="pill ${pillCron_(sc)}">${esc(sc)}</span></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-teal" onclick="abrirValidacaoCronograma('${esc(o.ID)}',true)"><span class="ico">check</span>Validar</button>
+        <button class="btn btn-ghost" onclick="abrirValidacaoCronograma('${esc(o.ID)}',false)"><span class="ico">close</span>Solicitar revisão</button>
+      </div>
+    </div>`;
+  }
+
+  renderShell('obras', h, true);
+
+  ETAPA_SEQ = 0; PACOTE_SEQ = 0; PACOTE_ID_TO_SEQ = {};
+  RISCOS_POR_PACOTE = {};
+  (d.riscos||[]).forEach(r=>{ (RISCOS_POR_PACOTE[r.IDPacote]=RISCOS_POR_PACOTE[r.IDPacote]||[]).push(r); });
+  RESTRICOES_POR_PACOTE = {};
+  (d.restricoes||[]).forEach(r=>{ (RESTRICOES_POR_PACOTE[r.IDPacote]=RESTRICOES_POR_PACOTE[r.IDPacote]||[]).push(r); });
+  EVIDENCIAS_POR_RESTRICAO = {};
+  (d.evidenciasRestricao||[]).forEach(e=>{ (EVIDENCIAS_POR_RESTRICAO[e.IDRestricao]=EVIDENCIAS_POR_RESTRICAO[e.IDRestricao]||[]).push(e); });
+  const pacotesPorEtapa = {};
+  (d.cronograma||[]).forEach(p=>{ (pacotesPorEtapa[p.IDEtapa]=pacotesPorEtapa[p.IDEtapa]||[]).push(p); });
+  if((d.etapas||[]).length){
+    d.etapas.forEach(e=>addEtapaTab(e, pacotesPorEtapa[e.ID]||[]));
+  }else{
+    addEtapaTab();
+  }
+  atualizarPredecessoraOpcoes_();
+  recalcularTudo_();
+
+  // trava de "sujo" começa DEPOIS da população inicial — só marca a
+  // partir daqui pra frente, quando é o usuário mexendo de verdade
+  CRON_SUJO = false;
+  const cont = document.getElementById('etapasContainer');
+  if(cont){
+    cont.addEventListener('input', marcarCronSujo_);
+    cont.addEventListener('change', marcarCronSujo_);
+    cont.addEventListener('click', function(ev){ if(ev.target.closest('.del-btn, .et-add button')) marcarCronSujo_(); });
+  }
+}
+
+function novaEtapa(){
+  marcarCronSujo_();
+  addEtapaTab();
+  atualizarPredecessoraOpcoes_();
+  recalcularTudo_();
+}
+
+function addEtapaTab(etapaDados, pacotes){
+  etapaDados = etapaDados||{}; pacotes = pacotes||[];
+  const seq = ETAPA_SEQ++;
+  const div = document.createElement('div');
+  div.className='etapa-tab depth-card';
+  div.dataset.etapaseq = seq;
+  div.dataset.id = etapaDados.ID||'';
+  div.innerHTML = `
+    <div class="et-head" onclick="if(event.target.closest('.et-acoes')||event.target.tagName==='INPUT')return;this.closest('.etapa-tab').classList.toggle('collapsed')">
+      <span class="ico et-chevron">expand_less</span>
+      <span class="et-num"></span>
+      <input type="text" class="e-nome" value="${esc(etapaDados.Nome||'')}" placeholder="Nome da etapa" oninput="recalcularTudo_();atualizarPredecessoraOpcoes_()">
+      <span class="et-stat">Início: <b class="et-ini">—</b></span>
+      <span class="et-stat">Término: <b class="et-fim">—</b></span>
+      <span class="et-custo-pill">Custo total: <b class="et-custo">—</b></span>
+      <span class="et-acoes">
+        <button class="del-btn" title="Remover etapa" onclick="removerEtapa_(this)"><span class="ico" style="font-size:16px">close</span></button>
+      </span>
+    </div>
+    <div class="tab-scroll"><table class="tabela-cron">
+      <thead><tr><th class="tc-num">#</th><th>Atividade</th><th>Responsável</th><th>Datas previstas</th><th style="text-align:center">Risco</th><th>Restrição</th><th>Custo doação</th><th>Custo próprio</th><th>Observação</th><th>Predecessora</th><th>Status</th><th></th></tr></thead>
+      <tbody class="pacotes-tbody"></tbody>
+    </table></div>
+    <div class="et-add"><button onclick="addPacoteRow(this.closest('.etapa-tab'));atualizarPredecessoraOpcoes_();recalcularTudo_()"><span class="ico" style="font-size:16px">add_circle</span>Adicionar pacote de trabalho</button></div>`;
+  $('etapasContainer').appendChild(div);
+  pacotes.forEach(p=>addPacoteRow(div, p));
+  return seq;
+}
+
+function removerEtapa_(btn){
+  const tab = btn.closest('.etapa-tab');
+  const n = tab.querySelectorAll('.pacotes-tbody tr').length;
+  if(n && !confirm('Esta etapa tem '+n+' pacote(s). Remover a etapa remove também os pacotes dela. Continuar?'))return;
+  tab.remove();
+  atualizarPredecessoraOpcoes_();
+  recalcularTudo_();
+}
+
+function addPacoteRow(etapaTab, p){
+  p = p||{};
+  const seq = PACOTE_SEQ++;
+  if(p.ID) PACOTE_ID_TO_SEQ[p.ID] = seq;
+  const tr = document.createElement('tr');
+  tr.dataset.pacoteseq = seq;
+  tr.dataset.id = p.ID||'';
+  tr._predServerIds = p.Predecessora ? p.Predecessora.split(';').filter(Boolean) : [];
+  tr.innerHTML = `
+    <td class="tc-num"></td>
+    <td style="min-width:180px"><input type="text" class="p-ativ" maxlength="300" value="${esc(p.Atividade||'')}" placeholder="Atividade" oninput="atualizarPredecessoraOpcoes_()"></td>
+    <td style="min-width:120px"><input type="text" class="p-resp" maxlength="120" value="${esc(p.Responsavel||'')}" placeholder="Responsável">
+      <select class="p-resp-user" style="margin-top:4px;font-size:11px;padding:3px 6px" title="Vincular a um usuário do sistema (papel Responsável) — permite que ele faça o checkoff do próprio pacote">
+        <option value="">— sem vínculo de sistema —</option>
+        ${(CRON_OBRA.responsaveis||[]).map(r=>'<option value="'+esc(r.ID)+'"'+(p.ResponsavelUserId===r.ID?' selected':'')+'>'+esc(r.Nome)+'</option>').join('')}
+      </select>
+    </td>
+    <td style="white-space:nowrap"><input type="date" class="p-ini" value="${esc(p.DataInicioPrevista||'')}" onchange="aoMudarDataOuPredecessora_()"> <span style="color:var(--muted)">→</span> <input type="date" class="p-fim" value="${esc(p.DataFimPrevista||'')}" onchange="aoMudarDataOuPredecessora_()"></td>
+    <td class="tc-risco">${riscoBadgeHtml_(p.ID||'', (RISCOS_POR_PACOTE[p.ID]||[]).length)}</td>
+    <td class="tc-risco">${restricaoBadgeHtml_(p.ID||'', (RESTRICOES_POR_PACOTE[p.ID]||[]))}</td>
+    <td class="tc-custo"><input type="text" class="p-doacao" value="${esc(p.CustoDoacao||'')}" placeholder="R$" oninput="recalcularTudo_()"></td>
+    <td class="tc-custo"><input type="text" class="p-proprio" value="${esc(p.CustoProprio||'')}" placeholder="R$" oninput="recalcularTudo_()"></td>
+    <td style="min-width:130px"><input type="text" class="p-obs" maxlength="1000" value="${esc(p.Observacao||'')}" placeholder="nota…" style="font-style:italic"></td>
+    <td><details class="pred-dd"><summary><span class="pred-resumo">Nenhuma</span><span class="ico" style="font-size:14px">arrow_drop_down</span></summary><div class="pred-pop pacote-pred-picker"></div></details></td>
+    <td><select class="p-status" onchange="recalcularTudo_()">${opt(['Não iniciada','Em andamento','Concluída'], p.Status||'Não iniciada')}</select></td>
+    <td><button class="del-btn" title="Remover" style="width:26px;height:26px" onclick="const et=this.closest('.etapa-tab');this.closest('tr').remove();atualizarPredecessoraOpcoes_();recalcularTudo_()"><span class="ico" style="font-size:15px">close</span></button></td>`;
+  etapaTab.querySelector('.pacotes-tbody').appendChild(tr);
+  return seq;
+}
+
+// ═══════════════════════ POPUP DE RISCOS (por pacote) ═══════════════════
+// Cada pacote pode ter N riscos, cada um com plano de ação e prazo de
+// solução próprios (dias corridos ou úteis). Só existe pra pacote já
+// salvo (tem ID real) — riscos são persistidos na hora, via API própria,
+// não fazem parte do payload de salvarCronograma.
+const TIPO_PRAZO_OPCOES_CLIENTE = ['Corridos', 'Úteis'];
+let RISCO_MODAL_CTX = null;
+
+function riscoBadgeHtml_(idPacote, n){
+  if(!idPacote) return '<button type="button" class="risk-btn risk-btn-empty" disabled title="Salve o pacote antes de cadastrar riscos">Salve o pacote</button>';
+  if(n>0) return '<button type="button" class="risk-btn risk-btn-has" onclick="abrirRiscosPacote(this)"><span class="ico" style="font-size:14px">warning</span>Ver riscos ('+n+')</button>';
+  return '<button type="button" class="risk-btn risk-btn-empty" onclick="abrirRiscosPacote(this)">Nenhum risco cadastrado</button>';
+}
+
+function atualizarBadgeRiscoLinha_(idPacote){
+  const tr = document.querySelector('#etapasContainer tr[data-id="'+idPacote+'"]');
+  if(!tr) return;
+  const td = tr.querySelector('.tc-risco');
+  if(td) td.innerHTML = riscoBadgeHtml_(idPacote, (RISCOS_POR_PACOTE[idPacote]||[]).length);
+  recalcularTudo_();
+}
+
+function abrirRiscosPacote(btn){
+  const tr = btn.closest('tr');
+  const idPacote = tr.dataset.id;
+  if(!idPacote){ toast('Salve o pacote antes de cadastrar riscos.'); return; }
+  RISCO_MODAL_CTX = { idPacote: idPacote, idObra: CRON_OBRA.obra.ID, nomeAtividade: tr.querySelector('.p-ativ').value.trim()||'(sem nome)', editandoId: null };
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalRiscos" onclick="if(event.target===this)fecharModalRiscos_()">
+    <div class="modal-card" style="max-width:760px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:4px">
+        <div><h2 style="margin:0"><span class="ico">warning</span>Riscos da atividade</h2>
+        <p style="font-size:12.5px;color:var(--muted);margin-top:2px">${esc(RISCO_MODAL_CTX.nomeAtividade)}</p></div>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharModalRiscos_()"><span class="ico">close</span></button>
+      </div>
+      <div id="riscosLista"></div>
+      <div id="riscoFormWrap" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)"></div>
+    </div>
+  </div>`);
+  renderRiscosModal_();
+}
+
+function fecharModalRiscos_(){
+  const m = $('modalRiscos');
+  if(m) m.remove();
+  RISCO_MODAL_CTX = null;
+}
+
+function riscoFormHtml_(riscoEmEdicao){
+  const r = riscoEmEdicao || {};
+  return `<h3 style="margin:0 0 10px">${riscoEmEdicao?'Editar risco':'Novo risco'}</h3>
+    <div class="form-grid-2">
+      <div><label>Local</label><input type="text" id="rf_local" maxlength="150" value="${esc(r.Local||'')}" placeholder="ex.: Subsolo, Ala B…"></div>
+      <div><label>Nome do risco</label><input type="text" id="rf_nome" maxlength="200" value="${esc(r.NomeRisco||'')}" placeholder="ex.: Rede elétrica não mapeada"></div>
+    </div>
+    <label>Descrição</label><textarea id="rf_desc" maxlength="1000" placeholder="detalhe o risco…">${esc(r.Descricao||'')}</textarea>
+    <div class="form-grid-2">
+      <div><label>Responsável</label><input type="text" id="rf_resp" maxlength="120" value="${esc(r.Responsavel||'')}" placeholder="quem trata este risco"></div>
+      <div><label>Prazo de solução</label><div style="display:flex;gap:6px">
+        <input type="number" id="rf_prazo" min="0" max="9999" style="width:90px" value="${r.PrazoDias!=null?esc(r.PrazoDias):''}" placeholder="dias">
+        <select id="rf_tipoprazo" style="width:130px">${opt(TIPO_PRAZO_OPCOES_CLIENTE, r.TipoPrazo||'Corridos')}</select>
+      </div></div>
+    </div>
+    <label>Plano de ação</label><textarea id="rf_plano" maxlength="1000" placeholder="o que será feito pra mitigar/resolver…">${esc(r.PlanoAcao||'')}</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn btn-teal" onclick="salvarRiscoForm_()"><span class="ico">check</span>${riscoEmEdicao?'Salvar alterações':'Adicionar risco'}</button>
+      ${riscoEmEdicao?'<button class="btn btn-ghost" onclick="RISCO_MODAL_CTX.editandoId=null;renderRiscosModal_()">Cancelar edição</button>':''}
+    </div>`;
+}
+
+function renderRiscosModal_(){
+  if(!RISCO_MODAL_CTX) return;
+  const riscos = RISCOS_POR_PACOTE[RISCO_MODAL_CTX.idPacote] || [];
+  const lista = $('riscosLista');
+  if(lista){
+    lista.innerHTML = riscos.length ? `<table class="tabela-densa" style="margin-bottom:0">
+      <thead><tr><th>Local</th><th>Risco</th><th>Responsável</th><th>Prazo</th><th></th></tr></thead>
+      <tbody>${riscos.map(r=>`<tr>
+        <td>${esc(r.Local||'—')}</td>
+        <td><b>${esc(r.NomeRisco)}</b>${r.Descricao?'<br><small style="color:var(--muted)">'+esc(r.Descricao)+'</small>':''}${r.PlanoAcao?'<br><small style="color:var(--teal-dark)">Plano: '+esc(r.PlanoAcao)+'</small>':''}</td>
+        <td>${esc(r.Responsavel||'—')}</td>
+        <td style="white-space:nowrap">${r.PrazoDias?esc(r.PrazoDias)+' '+esc(r.TipoPrazo||'Corridos').toLowerCase():'—'}</td>
+        <td style="white-space:nowrap"><button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="RISCO_MODAL_CTX.editandoId='${esc(r.ID)}';renderRiscosModal_()"><span class="ico" style="font-size:14px">edit</span></button>
+        <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="excluirRiscoModal_('${esc(r.ID)}')"><span class="ico" style="font-size:14px">delete</span></button></td>
+      </tr>`).join('')}</tbody></table>` : '<p style="color:var(--muted);font-size:13px;text-align:center;padding:18px 0">Nenhum risco cadastrado ainda pra esta atividade.</p>';
+  }
+  const editando = RISCO_MODAL_CTX.editandoId ? riscos.find(r=>r.ID===RISCO_MODAL_CTX.editandoId) : null;
+  const formWrap = $('riscoFormWrap');
+  if(formWrap) formWrap.innerHTML = riscoFormHtml_(editando);
+}
+
+async function salvarRiscoForm_(){
+  if(!RISCO_MODAL_CTX) return;
+  const nome = $('rf_nome').value.trim();
+  if(!nome){ toast('Informe o nome do risco.'); return; }
+  const dados = {
+    ID: RISCO_MODAL_CTX.editandoId || '',
+    IDObra: RISCO_MODAL_CTX.idObra, IDPacote: RISCO_MODAL_CTX.idPacote,
+    Local: $('rf_local').value.trim(), NomeRisco: nome, Descricao: $('rf_desc').value.trim(),
+    Responsavel: $('rf_resp').value.trim(), PlanoAcao: $('rf_plano').value.trim(),
+    PrazoDias: $('rf_prazo').value, TipoPrazo: $('rf_tipoprazo').value
+  };
+  try{
+    const r = await gs('apiSalvarRisco', TOKEN, dados);
+    const arr = RISCOS_POR_PACOTE[RISCO_MODAL_CTX.idPacote] = RISCOS_POR_PACOTE[RISCO_MODAL_CTX.idPacote] || [];
+    const i = arr.findIndex(x=>x.ID===r.risco.ID);
+    if(i>=0) arr[i]=r.risco; else arr.push(r.risco);
+    RISCO_MODAL_CTX.editandoId = null;
+    renderRiscosModal_();
+    atualizarBadgeRiscoLinha_(RISCO_MODAL_CTX.idPacote);
+    toast('Risco salvo.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirRiscoModal_(idRisco){
+  if(!RISCO_MODAL_CTX) return;
+  if(!confirm('Excluir este risco?')) return;
+  try{
+    await gs('apiExcluirRisco', TOKEN, idRisco);
+    const arr = RISCOS_POR_PACOTE[RISCO_MODAL_CTX.idPacote] || [];
+    RISCOS_POR_PACOTE[RISCO_MODAL_CTX.idPacote] = arr.filter(r=>r.ID!==idRisco);
+    if(RISCO_MODAL_CTX.editandoId===idRisco) RISCO_MODAL_CTX.editandoId = null;
+    renderRiscosModal_();
+    atualizarBadgeRiscoLinha_(RISCO_MODAL_CTX.idPacote);
+    toast('Risco excluído.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════════ POPUP DE RESTRIÇÕES (Make Ready, por pacote) ═══════
+// Impedimento JÁ IDENTIFICADO que bloqueia o pacote de estar pronto pra
+// execução — distinto de Risco (potencial futuro). Fluxo Pendente → Em
+// tratamento → Liberada (Restricoes.gs/apiMoverRestricao).
+const CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE = ['Materiais (Falta na Obra)','Projeto (Revisão Pendente)','Mão de Obra (Ausência)','Equipamento (Falha)','Clima'];
+let RESTRICAO_MODAL_CTX = null;
+
+function restricaoBadgeHtml_(idPacote, restricoes){
+  if(!idPacote) return '<button type="button" class="risk-btn risk-btn-empty" disabled title="Salve o pacote antes de cadastrar restrições">Salve o pacote</button>';
+  if(!restricoes.length) return '<button type="button" class="risk-btn risk-btn-empty" onclick="abrirRestricoesPacote(this)">Nenhuma restrição</button>';
+  const pendentes = restricoes.filter(r=>r.Status!=='Liberada').length;
+  if(pendentes>0) return '<button type="button" class="risk-btn risk-btn-has" onclick="abrirRestricoesPacote(this)"><span class="ico" style="font-size:14px">block</span>'+pendentes+' pendente'+(pendentes>1?'s':'')+'</button>';
+  return '<button type="button" class="risk-btn" style="background:var(--ok-bg);border-color:rgba(16,185,129,.3);color:#065F46" onclick="abrirRestricoesPacote(this)"><span class="ico" style="font-size:14px">check_circle</span>'+restricoes.length+' liberada'+(restricoes.length>1?'s':'')+'</button>';
+}
+
+function atualizarBadgeRestricaoLinha_(idPacote){
+  const tr = document.querySelector('#etapasContainer tr[data-id="'+idPacote+'"]');
+  if(!tr) return;
+  const tds = tr.querySelectorAll('.tc-risco');
+  const td = tds[1]; // 2ª .tc-risco da linha = coluna Restrição
+  if(td) td.innerHTML = restricaoBadgeHtml_(idPacote, RESTRICOES_POR_PACOTE[idPacote]||[]);
+}
+
+function abrirRestricoesPacote(btn){
+  const tr = btn.closest('tr');
+  const idPacote = tr.dataset.id;
+  if(!idPacote){ toast('Salve o pacote antes de cadastrar restrições.'); return; }
+  RESTRICAO_MODAL_CTX = { idPacote: idPacote, idObra: CRON_OBRA.obra.ID, nomeAtividade: tr.querySelector('.p-ativ').value.trim()||'(sem nome)', editandoId: null };
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalRestricoes" onclick="if(event.target===this)fecharModalRestricoes_()">
+    <div class="modal-card" style="max-width:780px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:4px">
+        <div><h2 style="margin:0"><span class="ico">block</span>Restrições da atividade</h2>
+        <p style="font-size:12.5px;color:var(--muted);margin-top:2px">${esc(RESTRICAO_MODAL_CTX.nomeAtividade)}</p></div>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharModalRestricoes_()"><span class="ico">close</span></button>
+      </div>
+      <div id="restricoesLista"></div>
+      <div id="restricaoFormWrap" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)"></div>
+    </div>
+  </div>`);
+  renderRestricoesModal_();
+}
+
+function fecharModalRestricoes_(){
+  const m = $('modalRestricoes');
+  if(m) m.remove();
+  RESTRICAO_MODAL_CTX = null;
+}
+
+function pillStatusRestricao_(status){
+  if(status==='Liberada') return 'pill-liberada';
+  if(status==='Em tratamento') return 'pill-encerrada';
+  return 'pill-recusado';
+}
+
+function restricaoFormHtml_(emEdicao){
+  const r = emEdicao || {};
+  return `<h3 style="margin:0 0 10px">${emEdicao?'Editar restrição':'Nova restrição'}</h3>
+    <div class="form-grid-2">
+      <div><label>Categoria</label><select id="rt_categoria">${opt(CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE, r.Categoria||CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE[0])}</select></div>
+      <div><label>Responsável</label><input type="text" id="rt_resp" maxlength="120" value="${esc(r.ResponsavelNome||'')}" placeholder="quem vai remover o impedimento"></div>
+    </div>
+    <label>Descrição *</label><textarea id="rt_desc" maxlength="1000" placeholder="descreva o impedimento…">${esc(r.Descricao||'')}</textarea>
+    <label>Prazo necessário <small>(até quando precisa estar liberada)</small></label>
+    <input type="date" id="rt_prazo" value="${esc(r.PrazoNecessario||'')}" style="max-width:180px">
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn btn-teal" onclick="salvarRestricaoForm_()"><span class="ico">check</span>${emEdicao?'Salvar alterações':'Adicionar restrição'}</button>
+      ${emEdicao?'<button class="btn btn-ghost" onclick="RESTRICAO_MODAL_CTX.editandoId=null;renderRestricoesModal_()">Cancelar edição</button>':''}
+    </div>
+    ${emEdicao ? evidenciasSecaoHtml_(r.ID) : '<p style="font-size:11.5px;color:var(--muted);margin-top:10px">Salve a restrição pra poder anexar evidências de solução.</p>'}`;
+}
+
+// Evidências de solução: N arquivos por restrição (fotos/PDFs), enviados
+// direto do navegador e salvos no Drive (ver apiUploadEvidenciaRestricao).
+// Só disponível em edição (a restrição já precisa ter ID real).
+function evidenciasSecaoHtml_(idRestricao){
+  const lista = EVIDENCIAS_POR_RESTRICAO[idRestricao] || [];
+  const itens = lista.length ? lista.map(ev=>`<div class="evid-item">
+      <a href="${esc(ev.LinkDrive)}" target="_blank" rel="noopener"><span class="ico" style="font-size:15px">description</span>${esc(ev.NomeArquivo)}</a>
+      <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" onclick="excluirEvidenciaRestricao_('${esc(ev.ID)}')" title="Excluir evidência"><span class="ico" style="font-size:13px">delete</span></button>
+    </div>`).join('') : '<p style="font-size:12px;color:var(--muted);margin:4px 0 8px">Nenhuma evidência anexada ainda.</p>';
+  return `<div style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--border)">
+    <label style="margin-top:0">Evidências da solução <small>(fotos/documentos, até 8MB cada)</small></label>
+    <div id="evidLista">${itens}</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+      <input type="file" id="rt_evid_file" style="max-width:220px">
+      <button type="button" class="btn btn-ghost" onclick="enviarEvidenciaRestricao_('${esc(idRestricao)}')"><span class="ico" style="font-size:15px">upload</span>Enviar</button>
+    </div>
+  </div>`;
+}
+
+function lerArquivoBase64_(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=> resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = ()=> reject(new Error('Falha ao ler o arquivo.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function enviarEvidenciaRestricao_(idRestricao){
+  const input = $('rt_evid_file');
+  const file = input && input.files && input.files[0];
+  if(!file){ toast('Selecione um arquivo.'); return; }
+  if(file.size > 8*1024*1024){ toast('Arquivo maior que 8MB — reduza antes de enviar.'); return; }
+  try{
+    toast('Enviando evidência…');
+    const base64 = await lerArquivoBase64_(file);
+    const r = await gs('apiUploadEvidenciaRestricao', TOKEN, idRestricao, file.name, file.type||'application/octet-stream', base64);
+    const arr = EVIDENCIAS_POR_RESTRICAO[idRestricao] = EVIDENCIAS_POR_RESTRICAO[idRestricao] || [];
+    arr.push(r.evidencia);
+    renderRestricoesModal_();
+    toast('Evidência enviada.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirEvidenciaRestricao_(idEvidencia){
+  if(!confirm('Excluir esta evidência?')) return;
+  try{
+    await gs('apiExcluirEvidenciaRestricao', TOKEN, idEvidencia);
+    Object.keys(EVIDENCIAS_POR_RESTRICAO).forEach(k=>{
+      EVIDENCIAS_POR_RESTRICAO[k] = EVIDENCIAS_POR_RESTRICAO[k].filter(e=>e.ID!==idEvidencia);
+    });
+    renderRestricoesModal_();
+    toast('Evidência excluída.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+function renderRestricoesModal_(){
+  if(!RESTRICAO_MODAL_CTX) return;
+  const restricoes = RESTRICOES_POR_PACOTE[RESTRICAO_MODAL_CTX.idPacote] || [];
+  const lista = $('restricoesLista');
+  if(lista){
+    lista.innerHTML = restricoes.length ? `<table class="tabela-densa" style="margin-bottom:0">
+      <thead><tr><th>Categoria</th><th>Descrição</th><th>Responsável</th><th>Prazo</th><th>Status</th><th>Evid.</th><th></th></tr></thead>
+      <tbody>${restricoes.map(r=>`<tr>
+        <td>${esc(r.Categoria)}</td>
+        <td style="max-width:220px">${esc(r.Descricao)}</td>
+        <td>${esc(r.ResponsavelNome||'—')}</td>
+        <td style="white-space:nowrap">${r.PrazoNecessario?fmtBr(r.PrazoNecessario):'—'}</td>
+        <td><span class="pill ${pillStatusRestricao_(r.Status)}">${esc(r.Status)}</span></td>
+        <td style="white-space:nowrap;text-align:center">${(EVIDENCIAS_POR_RESTRICAO[r.ID]||[]).length ? '<span class="ico" style="font-size:15px;color:var(--teal-dark)" title="'+(EVIDENCIAS_POR_RESTRICAO[r.ID]||[]).length+' evidência(s)">attach_file</span>'+(EVIDENCIAS_POR_RESTRICAO[r.ID]||[]).length : '—'}</td>
+        <td style="white-space:nowrap">
+          ${r.Status==='Pendente'?'<button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="moverRestricaoModal_(\''+esc(r.ID)+'\',\'Em tratamento\')">Tratar</button>':''}
+          ${r.Status==='Em tratamento'?'<button class="btn btn-teal" style="padding:4px 8px;font-size:11px" onclick="moverRestricaoModal_(\''+esc(r.ID)+'\',\'Liberada\')">Liberar</button>':''}
+          ${r.Status==='Liberada'?'<button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="moverRestricaoModal_(\''+esc(r.ID)+'\',\'Pendente\')">Reabrir</button>':''}
+          <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="RESTRICAO_MODAL_CTX.editandoId='${esc(r.ID)}';renderRestricoesModal_()"><span class="ico" style="font-size:14px">edit</span></button>
+          <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="excluirRestricaoModal_('${esc(r.ID)}')"><span class="ico" style="font-size:14px">delete</span></button>
+        </td>
+      </tr>`).join('')}</tbody></table>` : '<p style="color:var(--muted);font-size:13px;text-align:center;padding:18px 0">Nenhuma restrição cadastrada ainda pra esta atividade.</p>';
+  }
+  const editando = RESTRICAO_MODAL_CTX.editandoId ? restricoes.find(r=>r.ID===RESTRICAO_MODAL_CTX.editandoId) : null;
+  const formWrap = $('restricaoFormWrap');
+  if(formWrap) formWrap.innerHTML = restricaoFormHtml_(editando);
+}
+
+async function salvarRestricaoForm_(){
+  if(!RESTRICAO_MODAL_CTX) return;
+  const desc = $('rt_desc').value.trim();
+  if(!desc){ toast('Descreva a restrição.'); return; }
+  const dados = {
+    ID: RESTRICAO_MODAL_CTX.editandoId || '',
+    IDObra: RESTRICAO_MODAL_CTX.idObra, IDPacote: RESTRICAO_MODAL_CTX.idPacote,
+    Categoria: $('rt_categoria').value, Descricao: desc,
+    ResponsavelNome: $('rt_resp').value.trim(), PrazoNecessario: $('rt_prazo').value
+  };
+  try{
+    const r = await gs('apiSalvarRestricao', TOKEN, dados);
+    const arr = RESTRICOES_POR_PACOTE[RESTRICAO_MODAL_CTX.idPacote] = RESTRICOES_POR_PACOTE[RESTRICAO_MODAL_CTX.idPacote] || [];
+    const i = arr.findIndex(x=>x.ID===r.restricao.ID);
+    if(i>=0) arr[i]=r.restricao; else arr.push(r.restricao);
+    RESTRICAO_MODAL_CTX.editandoId = null;
+    renderRestricoesModal_();
+    atualizarBadgeRestricaoLinha_(RESTRICAO_MODAL_CTX.idPacote);
+    toast('Restrição salva.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function moverRestricaoModal_(idRestricao, novoStatus){
+  if(!RESTRICAO_MODAL_CTX) return;
+  try{
+    await gs('apiMoverRestricao', TOKEN, idRestricao, novoStatus);
+    const arr = RESTRICOES_POR_PACOTE[RESTRICAO_MODAL_CTX.idPacote] || [];
+    const item = arr.find(r=>r.ID===idRestricao);
+    if(item) item.Status = novoStatus;
+    renderRestricoesModal_();
+    atualizarBadgeRestricaoLinha_(RESTRICAO_MODAL_CTX.idPacote);
+    toast('Status atualizado: '+novoStatus);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirRestricaoModal_(idRestricao){
+  if(!RESTRICAO_MODAL_CTX) return;
+  if(!confirm('Excluir esta restrição?')) return;
+  try{
+    await gs('apiExcluirRestricao', TOKEN, idRestricao);
+    const arr = RESTRICOES_POR_PACOTE[RESTRICAO_MODAL_CTX.idPacote] || [];
+    RESTRICOES_POR_PACOTE[RESTRICAO_MODAL_CTX.idPacote] = arr.filter(r=>r.ID!==idRestricao);
+    if(RESTRICAO_MODAL_CTX.editandoId===idRestricao) RESTRICAO_MODAL_CTX.editandoId = null;
+    renderRestricoesModal_();
+    atualizarBadgeRestricaoLinha_(RESTRICAO_MODAL_CTX.idPacote);
+    toast('Restrição excluída.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// Predecessora referenciada por seq de cliente (estável ao adicionar/
+// remover), resolvida pra índice só no save — permite apontar pra pacote
+// novo do mesmo save. Reconstrói os checkboxes preservando marcações.
+function atualizarPredecessoraOpcoes_(){
+  const rows = Array.from(document.querySelectorAll('#etapasContainer .pacotes-tbody tr'));
+  const marcados = {};
+  rows.forEach(tr=>{
+    const picker = tr.querySelector('.pacote-pred-picker');
+    if(tr._pickerBuilt){
+      marcados[tr.dataset.pacoteseq] = Array.from(picker.querySelectorAll('input:checked')).map(i=>i.value);
+    }else{
+      marcados[tr.dataset.pacoteseq] = (tr._predServerIds||[])
+        .map(id=>PACOTE_ID_TO_SEQ[id]).filter(v=>v!==undefined).map(String);
+    }
+  });
+  rows.forEach(tr=>{
+    const meu = tr.dataset.pacoteseq;
+    const picker = tr.querySelector('.pacote-pred-picker');
+    const outros = rows.filter(o=>o.dataset.pacoteseq!==meu);
+    if(!outros.length){ picker.innerHTML='<small style="color:var(--muted)">Nenhum outro pacote ainda.</small>'; tr._pickerBuilt=true; atualizarPredResumo_(tr); return; }
+    const ja = marcados[meu]||[];
+    picker.innerHTML = outros.map(o=>{
+      const etNome = o.closest('.etapa-tab').querySelector('.e-nome').value.trim();
+      const ativ = o.querySelector('.p-ativ').value.trim()||'(sem nome)';
+      return '<label class="check-line" style="padding:1px 0;font-size:11.5px"><input type="checkbox" value="'+o.dataset.pacoteseq+'" '+(ja.indexOf(o.dataset.pacoteseq)>=0?'checked':'')+' onchange="atualizarPredResumo_(this.closest(\'tr\'));aoMudarDataOuPredecessora_()"><span>'+(etNome?'<b>'+esc(etNome)+'</b> — ':'')+esc(ativ)+'</span></label>';
+    }).join('');
+    tr._pickerBuilt=true;
+    atualizarPredResumo_(tr);
+  });
+}
+function atualizarPredResumo_(tr){
+  if(!tr)return;
+  const n = tr.querySelectorAll('.pacote-pred-picker input:checked').length;
+  const el = tr.querySelector('.pred-resumo');
+  if(el) el.textContent = n ? n+' selecionada'+(n>1?'s':'') : 'Nenhuma';
+}
+
+// ═══════════ AGENDAMENTO AUTOMÁTICO (estilo MS Project) ═══════════
+// Se o início de um pacote fica ANTES do fim de alguma predecessora dele,
+// empurra o início pra o dia seguinte ao fim da predecessora (preservando
+// a duração original do pacote — mesma duração, só desloca no tempo).
+// Roda em várias passadas pra propagar em cadeia (A atrasa B, que atrasa
+// C...). Só empurra pra FRENTE — nunca antecipa uma data automaticamente.
+function somarDias_(iso, n){
+  const d = parseDate(iso);
+  if(!d) return iso;
+  d.setDate(d.getDate()+n);
+  return toIso(d);
+}
+
+function aplicarAgendamentoAutomatico_(){
+  const rows = Array.from(document.querySelectorAll('#etapasContainer .pacotes-tbody tr'));
+  let mudouAlgumaVez = false;
+  for(let passo=0; passo<rows.length+1; passo++){
+    let mudouNestaPassada = false;
+    rows.forEach(tr=>{
+      const preds = Array.from(tr.querySelectorAll('.pacote-pred-picker input:checked')).map(i=>i.value);
+      if(!preds.length) return;
+      let maiorFimPred = null;
+      preds.forEach(seq=>{
+        const predTr = rows.find(r=>r.dataset.pacoteseq===seq);
+        if(!predTr) return;
+        const fimPred = predTr.querySelector('.p-fim').value;
+        if(fimPred && (!maiorFimPred || fimPred>maiorFimPred)) maiorFimPred = fimPred;
+      });
+      if(!maiorFimPred) return;
+      const inicioMinimo = somarDias_(maiorFimPred, 1);
+      const iniInput = tr.querySelector('.p-ini'), fimInput = tr.querySelector('.p-fim');
+      const iniAtual = iniInput.value, fimAtual = fimInput.value;
+      if(iniAtual && iniAtual < inicioMinimo){
+        const duracao = fimAtual ? diffDias_(iniAtual, fimAtual) : 0;
+        iniInput.value = inicioMinimo;
+        if(fimAtual) fimInput.value = somarDias_(inicioMinimo, duracao);
+        mudouAlgumaVez = true; mudouNestaPassada = true;
+      }
+    });
+    if(!mudouNestaPassada) break;
+  }
+  return mudouAlgumaVez;
+}
+
+function aoMudarDataOuPredecessora_(){
+  const mudou = aplicarAgendamentoAutomatico_();
+  recalcularTudo_();
+  if(mudou) toast('Data(s) ajustada(s) automaticamente — início não pode ficar antes do fim da predecessora.');
+}
+
+// Numeração + resumos de etapa + tiles globais — sempre derivados do DOM.
+function recalcularTudo_(){
+  let custoG=0, iniG=null, fimG=null, nPac=0, nRiscos=0;
+  Array.from(document.querySelectorAll('#etapasContainer .etapa-tab')).forEach((tab,ei)=>{
+    tab.querySelector('.et-num').textContent = String(ei+1).padStart(2,'0');
+    let custo=0, ini=null, fim=null;
+    Array.from(tab.querySelectorAll('.pacotes-tbody tr')).forEach((tr,pi)=>{
+      tr.querySelector('.tc-num').textContent = (ei+1)+'.'+(pi+1);
+      nPac++;
+      custo += parseMoeda(tr.querySelector('.p-doacao').value)+parseMoeda(tr.querySelector('.p-proprio').value);
+      if((RISCOS_POR_PACOTE[tr.dataset.id]||[]).length) nRiscos++;
+      const di=tr.querySelector('.p-ini').value, df=tr.querySelector('.p-fim').value;
+      if(di&&(!ini||di<ini))ini=di;
+      if(df&&(!fim||df>fim))fim=df;
+    });
+    tab.querySelector('.et-ini').textContent = ini?fmtBr(ini):'—';
+    tab.querySelector('.et-fim').textContent = fim?fmtBr(fim):'—';
+    tab.querySelector('.et-custo').textContent = custo>0?fmtMoeda(custo):'—';
+    custoG+=custo;
+    if(ini&&(!iniG||ini<iniG))iniG=ini;
+    if(fim&&(!fimG||fim>fimG))fimG=fim;
+  });
+  if($('rgCusto'))$('rgCusto').textContent=fmtMoeda(custoG);
+  if($('rgPacotes'))$('rgPacotes').textContent=nPac;
+  if($('rgRiscos'))$('rgRiscos').textContent=String(nRiscos).padStart(2,'0');
+  if($('rgDias')&&$('rgTermino')){
+    if(iniG&&fimG){
+      const dias=Math.round((new Date(fimG+'T00:00:00')-new Date(iniG+'T00:00:00'))/86400000)+1;
+      $('rgDias').textContent=dias+' dias';
+      $('rgTermino').textContent='término previsto: '+fmtBr(fimG);
+    }else{$('rgDias').textContent='—';$('rgTermino').textContent='sem datas ainda';}
+  }
+}
+
+async function salvarCronograma(idObra, enviarParaValidacao){
+  const tabsValidas = Array.from(document.querySelectorAll('#etapasContainer .etapa-tab'))
+    .filter(t=>t.querySelector('.e-nome').value.trim());
+  const etapaSeqToIdx = {};
+  tabsValidas.forEach((t,i)=>{ etapaSeqToIdx[t.dataset.etapaseq]=i; });
+  const etapas = tabsValidas.map(t=>({ ID:t.dataset.id||'', Nome:t.querySelector('.e-nome').value.trim() }));
+
+  const rowsValidas = Array.from(document.querySelectorAll('#etapasContainer .pacotes-tbody tr'))
+    .filter(tr=>tr.querySelector('.p-ativ').value.trim());
+  const pacoteSeqToIdx = {};
+  rowsValidas.forEach((tr,i)=>{ pacoteSeqToIdx[tr.dataset.pacoteseq]=i; });
+
+  const pacotes = rowsValidas.map(tr=>{
+    const etIdx = etapaSeqToIdx[tr.closest('.etapa-tab').dataset.etapaseq];
+    const predSeqs = Array.from(tr.querySelectorAll('.pacote-pred-picker input:checked')).map(i=>i.value);
+    return {
+      ID: tr.dataset.id||'',
+      EtapaIdx: typeof etIdx==='number' ? etIdx : -1,
+      Atividade: tr.querySelector('.p-ativ').value.trim(),
+      Responsavel: tr.querySelector('.p-resp').value.trim(),
+      ResponsavelUserId: tr.querySelector('.p-resp-user').value,
+      DataInicioPrevista: tr.querySelector('.p-ini').value,
+      DataFimPrevista: tr.querySelector('.p-fim').value,
+      CustoDoacao: tr.querySelector('.p-doacao').value.trim(),
+      CustoProprio: tr.querySelector('.p-proprio').value.trim(),
+      Observacao: tr.querySelector('.p-obs').value.trim(),
+      Status: tr.querySelector('.p-status').value,
+      PredecessoraIdx: predSeqs.map(s=>pacoteSeqToIdx[s]).filter(i=>i!==undefined)
+    };
+  });
+
+  if(!etapas.length){toast('Adicione ao menos uma etapa com nome.');return;}
+  // trava contra clique duplo — sem isso, dois cliques rápidos disparam
+  // duas gravações concorrentes (o servidor serializa via lock, mas cada
+  // uma reabre a tela depois, dando a impressão de duplicidade)
+  const btnRascunho=$('btnRascunhoCron'), btnEnviar=$('btnEnviarCron');
+  if(btnRascunho)btnRascunho.disabled=true;
+  if(btnEnviar)btnEnviar.disabled=true;
+  try{
+    const r = await gs('apiSalvarCronograma',TOKEN,idObra,etapas,pacotes,!!enviarParaValidacao);
+    OBRAS_CACHE=null;
+    CRON_SUJO=false;
+    toast(enviarParaValidacao ? ('Enviado para validação — status: '+r.statusCronograma+'.') : 'Rascunho salvo — você pode continuar depois.');
+    abrirCronograma(idObra);
+  }catch(e){
+    if(!tratarErroSessao(e))toast(e.message);
+    if(btnRascunho)btnRascunho.disabled=false;
+    if(btnEnviar)btnEnviar.disabled=false;
+  }
+}
+
+function abrirValidacaoCronograma(idObra,aprovado){
+  const wrap=$('validacaoCronWrap');if(!wrap)return;
+  wrap.innerHTML=`<h2><span class="ico">verified</span>${aprovado?'Validar cronograma':'Solicitar revisão'}</h2>
+    <label>Observações ${aprovado?'(opcional)':'— o que precisa ser ajustado'}</label>
+    <textarea id="obsValidacaoCron" maxlength="2000"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn ${aprovado?'btn-teal':'btn-danger'}" onclick="confirmarValidacaoCronograma('${idObra}',${aprovado})"><span class="ico">check</span>Confirmar</button>
+      <button class="btn btn-ghost" onclick="abrirCronograma('${idObra}')">Cancelar</button></div>`;
+}
+async function confirmarValidacaoCronograma(idObra,aprovado){
+  const obs=$('obsValidacaoCron')?$('obsValidacaoCron').value.trim():'';
+  if(!aprovado&&!obs){marcarErro(['obsValidacaoCron']);toast('Explique o que precisa ser revisado.');return;}
+  try{
+    await gs('apiValidarCronograma',TOKEN,idObra,aprovado,obs);
+    OBRAS_CACHE=null;
+    toast(aprovado?'Cronograma validado.':'Revisão solicitada à Engenharia.');
+    abrirDetalhe(idObra);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+// ── Gantt (visualização) — portado do sistema atual, CSS já no Estilos ──
+let GANTT_ZOOM = 1;
+let GANTT_COLAPSADAS = new Set(); // IDs de etapa recolhidas no Gantt (visualização)
+function toggleGanttEtapa_(idEtapa){
+  if(GANTT_COLAPSADAS.has(idEtapa)) GANTT_COLAPSADAS.delete(idEtapa); else GANTT_COLAPSADAS.add(idEtapa);
+  const host=document.getElementById('ganttHost');
+  if(host&&CRON_OBRA) host.outerHTML = renderGantt(CRON_OBRA.etapas, CRON_OBRA.cronograma);
+}
+function diffDias_(a,b){const d1=parseDate(a),d2=parseDate(b);if(!d1||!d2)return 0;return Math.round((d2-d1)/86400000);}
+function custoPacote_(p){ return parseMoeda(p.CustoDoacao)+parseMoeda(p.CustoProprio); }
+function blocosSemanaGantt_(minD, maxD, pxDia){
+  const blocos=[];let cursor=parseDate(minD);const fim=parseDate(maxD);
+  if(!cursor||!fim)return blocos;
+  const hojeIso=toIso(new Date());
+  while(cursor<=fim){
+    const inicioIso=toIso(cursor);
+    const diasRest=diffDias_(inicioIso,toIso(fim))+1;
+    const nDias=Math.min(7,diasRest);
+    const fimBloco=toIso(new Date(cursor.getTime()+(nDias-1)*86400000));
+    blocos.push({label:fmtBr(inicioIso).slice(0,5),largura:nDias*pxDia,atual:hojeIso>=inicioIso&&hojeIso<=fimBloco,iniIso:inicioIso,nDias:nDias});
+    cursor=new Date(cursor.getTime()+7*86400000);
+  }
+  return blocos;
+}
+
+function abrirGanttObra(){
+  if(!CRON_OBRA)return;
+  const o=CRON_OBRA.obra, sc=o.StatusCronograma||'Rascunho';
+  let h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">PLANEJAMENTO</span><span class="ref-code">${esc(o.ID)}</span><span class="pill ${pillCron_(sc)}">${esc(sc)}</span></div>
+    <h2>Gantt do projeto</h2><p class="ph-desc">${esc(o.Titulo)}</p></div>
+    <button class="btn btn-ghost" onclick="renderCronograma(CRON_OBRA)"><span class="ico">arrow_back</span>Voltar ao editor</button>
+  </div>` + renderGantt(CRON_OBRA.etapas, CRON_OBRA.cronograma);
+  renderShell('obras', h, true);
+}
+
+function renderGantt(etapas, pacotes){
+  etapas = etapas||[]; pacotes = pacotes||[];
+  if(!etapas.length){
+    return '<div class="card" style="text-align:center;padding:30px"><span class="ico" style="font-size:36px;color:#CBD5E1">timeline</span><p style="color:var(--muted);margin-top:8px">Nenhuma etapa cadastrada ainda.</p></div>';
+  }
+  const porEtapa={};
+  pacotes.forEach(p=>{(porEtapa[p.IDEtapa]=porEtapa[p.IDEtapa]||[]).push(p);});
+  let minD=null,maxD=null;
+  pacotes.forEach(p=>{
+    if(p.DataInicioPrevista&&(!minD||p.DataInicioPrevista<minD))minD=p.DataInicioPrevista;
+    if(p.DataFimPrevista&&(!maxD||p.DataFimPrevista>maxD))maxD=p.DataFimPrevista;
+  });
+  const temDatas=!!(minD&&maxD);
+  const diasTotal=temDatas?Math.max(1,diffDias_(minD,maxD)):1;
+  const pxDiaBase=temDatas?Math.max(4,Math.min(24,Math.floor(900/diasTotal))):0;
+  const pxDia=temDatas?Math.max(3,Math.min(90,Math.round(pxDiaBase*GANTT_ZOOM))):0;
+  const larguraBarras=temDatas?Math.max(260,(diasTotal+1)*pxDia):260;
+  const offsetPx=(iso)=>temDatas?Math.round(diffDias_(minD,iso)*pxDia):0;
+  const larguraPx=(i,f)=>(temDatas&&i&&f)?Math.max(6,Math.round((diffDias_(i,f)+1)*pxDia)):0;
+  const hojeIso=toIso(new Date());
+  const hojeOffset=(temDatas&&hojeIso>=minD&&hojeIso<=maxD)?offsetPx(hojeIso):null;
+  let custoTotal=0; pacotes.forEach(p=>{custoTotal+=custoPacote_(p);});
+
+  // geometria fixa por linha (34px, CSS) — necessária pras setas de
+  // dependência, que são desenhadas numa camada SVG sobre as barras
+  const semanas=temDatas?blocosSemanaGantt_(minD,maxD,pxDia):[];
+  const semanasHtml=semanas.map(b=>`<span class="gantt-semana${b.atual?' gantt-semana-atual':''}" style="width:${b.largura}px">${b.atual?'<span class="gsem-chip">'+esc(b.label)+' · atual</span>':esc(b.label)}</span>`).join('');
+  // sub-cabeçalho com as iniciais dos dias (D S T Q Q S S), como no modelo —
+  // só quando cada dia tem espaço legível
+  const INICIAIS_DIA=['D','S','T','Q','Q','S','S'];
+  let diasHtml='';
+  if(temDatas && pxDia>=13){
+    diasHtml = '<div class="gantt-header" style="height:auto;border-bottom:none"><span class="gantt-fixed" style="background:#fff"><span class="gantt-desc"></span><span class="gantt-data"></span><span class="gantt-data"></span><span class="gantt-custo"></span></span><span class="gantt-bar-area" style="width:'+larguraBarras+'px;padding:0"><span class="gantt-dias">'+
+      semanas.map(b=>{
+        const d0=parseDate(b.iniIso);
+        let dias='';
+        for(let k=0;k<b.nDias;k++){const dt=new Date(d0.getTime()+k*86400000);dias+='<span class="gdia" style="width:'+pxDia+'px">'+INICIAIS_DIA[dt.getDay()]+'</span>';}
+        return '<span class="gdia-bloco'+(b.atual?' atual':'')+'" style="width:'+b.largura+'px">'+dias+'</span>';
+      }).join('')+'</span></span></div>';
+  }
+  let curIni=null,curW=0,accX=0;
+  semanas.forEach(b=>{ if(b.atual){curIni=accX;curW=b.largura;} accX+=b.largura; });
+
+  const ROWH=48, FIXW=541; // h-12; 260(atividade)+90(início)+90(fim)+100(custo)+1(borda direita de .gantt-fixed) — se mudar as colunas, atualizar
+  const dataCurta=(iso)=>iso?fmtBr(iso).slice(0,5):'—';
+  const posPorPacote={};
+  let linhas='', rowIdx=0;
+  etapas.forEach((e,ei)=>{
+    const filhos=porEtapa[e.ID]||[];
+    let eIni=null,eFim=null,eCusto=0;
+    filhos.forEach(p=>{
+      if(p.DataInicioPrevista&&(!eIni||p.DataInicioPrevista<eIni))eIni=p.DataInicioPrevista;
+      if(p.DataFimPrevista&&(!eFim||p.DataFimPrevista>eFim))eFim=p.DataFimPrevista;
+      eCusto+=custoPacote_(p);
+    });
+    const colapsada = GANTT_COLAPSADAS.has(e.ID);
+    const chevron = colapsada ? 'chevron_right' : 'expand_more';
+    linhas += `<div class="gantt-row gantt-row-etapa"><span class="gantt-fixed">
+        <span class="gantt-desc" style="cursor:pointer" onclick="toggleGanttEtapa_('${esc(e.ID)}')"><span class="ico ico-chevron">${chevron}</span><span class="gd-txt"><span class="gd-nome">${ei+1}.0 ${esc(e.Nome)}</span><small>${filhos.length} pacote${filhos.length===1?'':'s'}</small></span></span>
+        <span class="gantt-data">${eIni?dataCurta(eIni):'—'}</span><span class="gantt-data">${eFim?dataCurta(eFim):'—'}</span>
+        <span class="gantt-custo">${eCusto>0?fmtMoeda(eCusto):'—'}</span></span>
+      <span class="gantt-bar-area" style="width:${larguraBarras}px">
+        ${eIni&&eFim?'<span class="gantt-bar gantt-bar-etapa" style="left:'+offsetPx(eIni)+'px;width:'+larguraPx(eIni,eFim)+'px"></span>':''}
+      </span></div>`;
+    rowIdx++;
+    if(colapsada) return; // pacotes ficam ocultos — não entram na contagem de linhas nem nas dependências
+    filhos.forEach((p,pi)=>{
+      const cls=p.Status==='Concluída'?'gantt-bar-done':p.Status==='Em andamento'?'gantt-bar-progress':'gantt-bar-todo';
+      const cp=custoPacote_(p);
+      const temBarra=p.DataInicioPrevista&&p.DataFimPrevista;
+      const bx=temBarra?offsetPx(p.DataInicioPrevista):0, bw=temBarra?larguraPx(p.DataInicioPrevista,p.DataFimPrevista):0;
+      if(temBarra) posPorPacote[p.ID]={row:rowIdx,x1:bx,x2:bx+bw};
+      const lab = bw>=70?'<span class="gb-lab">'+esc(p.Atividade)+'</span>':'';
+      const riscoIcoBarra = (p.TemRisco==='SIM'&&bw>=50)?'<span class="ico ico-fill">warning</span>':'';
+      // overlay de progresso: metade da barra pra "Em andamento" (não temos
+      // % exata ainda — Fase 9/Compromisso Semanal deve trazer isso de
+      // verdade); "Concluída" fica sólida, "Não iniciada" sem overlay
+      const overlayProgresso = p.Status==='Em andamento'?'<span class="gb-progresso" style="width:50%"></span>':'';
+      // ícone de risco LÍDER (antes do nome), como no modelo — não mais
+      // sufixo depois do texto
+      const riscoIcoLinha = p.TemRisco==='SIM'?'<span class="ico ico-fill ico-risco">warning</span>':'';
+      linhas += `<div class="gantt-row gantt-row-pacote"><span class="gantt-fixed">
+          <span class="gantt-desc">${riscoIcoLinha}<span class="gd-txt"><span class="gd-nome">${ei+1}.${pi+1} ${esc(p.Atividade)}</span><small>${esc(p.Responsavel||'—')}</small></span></span>
+          <span class="gantt-data">${dataCurta(p.DataInicioPrevista)}</span><span class="gantt-data">${dataCurta(p.DataFimPrevista)}</span>
+          <span class="gantt-custo">${cp>0?fmtMoeda(cp):'—'}</span></span>
+        <span class="gantt-bar-area" style="width:${larguraBarras}px">
+          ${temBarra?'<span class="gantt-bar '+cls+'" style="left:'+bx+'px;width:'+bw+'px">'+overlayProgresso+lab+riscoIcoBarra+'</span>':''}
+        </span></div>`;
+      rowIdx++;
+    });
+  });
+
+  // setas de dependência (predecessora → sucessora), como no modelo de
+  // validação: cotovelo saindo do fim da barra predecessora até o início
+  // da sucessora, com ponta de seta
+  let paths='';
+  pacotes.forEach(p=>{
+    if(!p.Predecessora||!posPorPacote[p.ID])return;
+    const alvo=posPorPacote[p.ID];
+    p.Predecessora.split(';').filter(Boolean).forEach(pid=>{
+      const orig=posPorPacote[pid];
+      if(!orig)return;
+      const y1=orig.row*ROWH+ROWH/2, y2=alvo.row*ROWH+ROWH/2;
+      paths+=`<path class="dep" d="M ${orig.x2} ${y1} L ${orig.x2+8} ${y1} L ${orig.x2+8} ${y2} L ${Math.max(alvo.x1-2,orig.x2+8)} ${y2}" marker-end="url(#gseta)"></path>`;
+    });
+  });
+  const alturaCorpo = rowIdx*ROWH;
+  // camada da FRENTE: setas de dependência + linha de hoje
+  const depsSvg = (paths||hojeOffset!=null)?`<svg class="gantt-deps" style="left:${FIXW}px;width:${larguraBarras}px;height:${alturaCorpo}px">
+    <defs><marker id="gseta" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto-start-reverse" viewBox="0 0 10 10"><path class="seta" d="M0,0 L10,5 L0,10 z"></path></marker></defs>
+    ${hojeOffset!=null?'<line class="hoje-linha" x1="'+hojeOffset+'" y1="0" x2="'+hojeOffset+'" y2="'+alturaCorpo+'"></line>':''}${paths}</svg>`:'';
+  // camada do FUNDO: grade semanal tracejada + coluna da semana atual
+  let fundoLinhas='', fx=0;
+  semanas.forEach(b=>{ fx+=b.largura; fundoLinhas+=`<line class="glinha" x1="${fx}" y1="0" x2="${fx}" y2="${alturaCorpo}"></line>`; });
+  const fundoSvg = temDatas?`<svg class="gantt-fundo" style="left:${FIXW}px;width:${larguraBarras}px;height:${alturaCorpo}px">
+    ${curIni!=null?'<rect class="gsemcol" x="'+curIni+'" y="0" width="'+curW+'" height="'+alturaCorpo+'"></rect>':''}${fundoLinhas}</svg>`:'';
+
+  return `<div class="gantt-wrap" id="ganttHost">
+    <div class="gantt-scroll">
+      <div class="gantt-header">
+        <span class="gantt-fixed"><span class="gantt-desc">Atividade / Responsável</span><span class="gantt-data">Início</span><span class="gantt-data">Fim</span><span class="gantt-custo">Custo</span></span>
+        <span class="gantt-bar-area gantt-semanas" style="width:${larguraBarras}px">${semanasHtml}</span>
+      </div>
+      ${diasHtml}
+      <div class="gantt-corpo">${fundoSvg}${linhas}${depsSvg}</div>
+    </div>
+    <div class="gantt-footer">
+      <div class="gantt-legend">
+        <span class="gantt-legenda-item"><span class="gantt-swatch gantt-bar-todo"></span>Não iniciada</span>
+        <span class="gantt-legenda-item"><span class="gantt-swatch gantt-bar-progress"></span>Em andamento</span>
+        <span class="gantt-legenda-item"><span class="gantt-swatch gantt-bar-done"></span>Concluída</span>
+      </div>
+      <div class="gantt-footer-right">
+        <div class="gantt-orcamento"><span class="gantt-orcamento-lab">Orçamento total</span><span class="gantt-orcamento-valor">${fmtMoeda(custoTotal)}</span></div>
+        <div class="gantt-zoom">
+          <button class="gantt-zoom-btn" onclick="zoomGantt_(-0.25)" title="Diminuir zoom"><span class="ico">zoom_out</span></button>
+          <button class="gantt-zoom-btn" onclick="zoomGantt_(0.25)" title="Aumentar zoom"><span class="ico">zoom_in</span></button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+function zoomGantt_(delta){
+  GANTT_ZOOM = Math.max(0.4, Math.min(3, +(GANTT_ZOOM+delta).toFixed(2)));
+  const host=document.getElementById('ganttHost');
+  if(host&&CRON_OBRA) host.outerHTML = renderGantt(CRON_OBRA.etapas, CRON_OBRA.cronograma);
+}
+</script>

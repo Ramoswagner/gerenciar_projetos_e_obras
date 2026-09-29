@@ -1,0 +1,243 @@
+<script>
+// ═══════════════ VISÃO PÚBLICA · NOVO PEDIDO + ACOMPANHAMENTO ═══════════════
+// Portado do App.html do sistema atual (mesmo comportamento). Incluído
+// só nas views pedido_form / pedido_status — o admin não carrega isto.
+
+function initPedidoForm(){
+  // dados já vêm embutidos no HTML pelo servidor (SSR) — render imediato,
+  // sem google.script.run na abertura da página
+  if(DADOS_INICIAIS && DADOS_INICIAIS.areas){ renderPedidoForm(DADOS_INICIAIS); return; }
+  renderPedidoForm({areas:[],setores:[]});
+}
+
+function renderPedidoForm(ctx){
+  let h = `
+  <header class="pub-topbar"><span class="pt-logo"><img src="${LOGO_HB}" alt="Hospital da Baleia"></span><h1>Solicitação de Serviço de Obra</h1></header>
+  <div class="pub-headline">
+    <h2>Peça uma obra à Engenharia</h2>
+    <p>Este formulário é a porta de entrada para reformas, ampliações e construções no ${'Hospital da Baleia'}. Depois de enviar, você recebe um link pessoal para acompanhar o andamento do pedido.</p>
+  </div>
+
+  <div class="form-card" id="formPedidoCard"><div class="form-body">
+    <div>
+    <div class="form-progress-label" id="pedProgressLabel">Preenchimento: 0 de 4 seções</div>
+    <div class="form-progress" id="pedProgress" aria-hidden="true"><div class="fp-seg"></div><div class="fp-seg"></div><div class="fp-seg"></div><div class="fp-seg"></div></div>
+    </div>
+    <h2 class="sec-legend">1. Quem está solicitando</h2>
+    <div class="grid2">
+      <div><label>Nome completo *</label><input type="text" id="pNome" maxlength="120" autocomplete="name"></div>
+      <div><label>Cargo / função *</label><input type="text" id="pCargo" maxlength="120"></div>
+    </div>
+    <div class="grid2">
+      <div><label>Contato * <small>(telefone ou e-mail)</small></label><input type="text" id="pContato" maxlength="150"></div>
+      <div><label>Área / setor *</label><select id="pArea"><option value="">Selecione…</option>${ctx.areas.map(a=>'<option>'+esc(a)+'</option>').join('')}</select></div>
+    </div>
+    <div class="grid2">
+      <div><label>Superintendência gestora</label><input type="text" id="pSuper" maxlength="150"></div>
+      <div><label>Centro de custo</label><input type="text" id="pCC" maxlength="100"></div>
+    </div>
+    <input type="text" id="p_hp" name="empresa_site" style="position:absolute;left:-9999px;opacity:0" tabindex="-1" autocomplete="off">
+
+    <h2 class="sec-legend" style="margin-top:6px">2. A obra pretendida</h2>
+    <label>Local desejado da obra</label>
+    <select id="pSetor"><option value="">Selecione…</option>${ctx.setores.map(s=>'<option>'+esc(s)+'</option>').join('')}</select>
+    <label>Finalidade / objetivo da obra * <small>— por que essa obra é necessária</small></label>
+    <textarea id="pFinalidade" maxlength="3000" placeholder="Ex.: recebimento de novo equipamento de imagem, ampliação da capacidade de atendimento…"></textarea>
+
+    <h2 class="sec-legend" style="margin-top:6px">3. Programa de necessidades</h2>
+    <label>Ambientes desejados <small>— ex.: 03 consultórios, 01 recepção com 3 guichês</small></label>
+    <textarea id="pAmbientes" maxlength="2000"></textarea>
+    <label>Equipamentos <small>— ex.: 05 negatoscópios, 08 computadores</small></label>
+    <textarea id="pEquipamentos" maxlength="2000"></textarea>
+    <label>Estimativa de população fixa e variável <small>— ex.: 50 usuários/dia, sendo 10 colaboradores e 40 pacientes</small></label>
+    <input type="text" id="pPopulacao" maxlength="500">
+
+    <h2 class="sec-legend" style="margin-top:6px">4. Prazo</h2>
+    <div class="grid2">
+      <div><label>Urgência *</label><select id="pUrgencia"><option value="">Selecione…</option>${URGENCIA_OPCOES.map(u=>'<option>'+esc(u)+'</option>').join('')}</select></div>
+      <div><label>Data desejada <small>(se houver)</small></label><input type="date" id="pData"></div>
+    </div>
+    <label>Justificativa da urgência <small>— ex.: equipamento chega em 20/08, data não negociável</small></label>
+    <textarea id="pJustUrg" maxlength="1000"></textarea>
+    <label>Anexos / referências <small>(link do Drive — fotos, catálogo, planta)</small></label>
+    <input type="text" id="pAnexos" maxlength="500" placeholder="https://…">
+
+  </div>
+  <div class="form-foot">
+    <span class="ff-nota">Ao enviar, sua solicitação é registrada formalmente para análise da Engenharia.</span>
+    <button class="btn btn-primary btn-pill" id="btnEnviarPedido" onclick="enviarPedido()"><span class="ico" style="font-size:16px">send</span>Enviar solicitação</button>
+  </div>
+  </div>
+  <div class="footer-note">Hospital da Baleia · Engenharia e PMO — sua solicitação será analisada pela Engenharia, que poderá entrar em contato para detalhar o escopo.</div>`;
+  app(h);
+  document.getElementById('app').classList.add('pub-com-topbar');
+  document.querySelectorAll('#formPedidoCard input,#formPedidoCard select,#formPedidoCard textarea').forEach(el=>{
+    el.addEventListener('input',atualizarProgressoPedido);
+    el.addEventListener('change',atualizarProgressoPedido);
+  });
+  atualizarProgressoPedido();
+  ativarGuardaFormulario('#formPedidoCard input,#formPedidoCard select,#formPedidoCard textarea');
+  ['pFinalidade','pAmbientes','pEquipamentos','pJustUrg'].forEach(attachFormatToolbar);
+}
+
+function atualizarProgressoPedido(){
+  const segs=document.querySelectorAll('#pedProgress .fp-seg');
+  if(!segs.length)return;
+  const val=id=>{const el=$(id);return el?el.value.trim():'';};
+  // uma seção conta como preenchida quando seus campos obrigatórios estão completos;
+  // o Programa de necessidades não tem obrigatórios, então conta com qualquer campo
+  const secoes=[
+    !!(val('pNome')&&val('pCargo')&&val('pContato')&&val('pArea')),
+    !!val('pFinalidade'),
+    !!(val('pAmbientes')||val('pEquipamentos')||val('pPopulacao')),
+    !!val('pUrgencia')
+  ];
+  secoes.forEach((ok,i)=>segs[i].classList.toggle('fill',ok));
+  const n=secoes.filter(Boolean).length;
+  const lab=$('pedProgressLabel');
+  if(lab)lab.textContent='Preenchimento: '+n+' de 4 seções';
+}
+
+async function enviarPedido(){
+  const dados = {
+    Nome:$('pNome').value, Cargo:$('pCargo').value, Contato:$('pContato').value, Area:$('pArea').value,
+    SuperintendenciaGestora:$('pSuper').value, CentroCusto:$('pCC').value, SetorDesejado:$('pSetor').value,
+    FinalidadeObjetivo:$('pFinalidade').value, Ambientes:$('pAmbientes').value, Equipamentos:$('pEquipamentos').value,
+    PopulacaoEstimada:$('pPopulacao').value, Urgencia:$('pUrgencia').value, DataDesejada:$('pData').value,
+    JustificativaUrgencia:$('pJustUrg').value, Anexos:$('pAnexos').value, _hp:$('p_hp').value
+  };
+  const faltando=[];
+  if(!dados.Nome.trim())faltando.push('pNome');
+  if(!dados.Cargo.trim())faltando.push('pCargo');
+  if(!dados.Contato.trim())faltando.push('pContato');
+  if(!dados.Area)faltando.push('pArea');
+  if(!dados.FinalidadeObjetivo.trim())faltando.push('pFinalidade');
+  if(!dados.Urgencia)faltando.push('pUrgencia');
+  if(faltando.length){marcarErro(faltando);toast('Preencha os campos destacados em vermelho.');return;}
+  const btn=$('btnEnviarPedido');btn.disabled=true;btn.innerHTML='<span class="ico">hourglass_top</span>Enviando…';
+  try{
+    const r = await gs('apiCriarPedido', dados);
+    desativarGuardaFormulario();
+    app(`<div class="card" style="text-align:center;padding:34px 20px">
+      <span class="ico" style="font-size:52px;color:var(--ok)">task_alt</span>
+      <h2 style="justify-content:center;margin-top:12px">Solicitação enviada</h2>
+      <p style="color:var(--muted);max-width:460px;margin:6px auto 16px">Protocolo <span class="ref-code">${esc(r.id)}</span>. Guarde o link abaixo para acompanhar o andamento — ele é pessoal, só você consegue ver o status deste pedido.</p>
+      <div class="linkbox" style="max-width:520px;margin:0 auto"><span class="ico" style="color:var(--teal-dark)">link</span><span style="flex:1;text-align:left">${esc(r.linkAcompanhamento)}</span></div>
+      <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-teal" onclick="copiar('${esc(r.linkAcompanhamento)}','Link copiado!')"><span class="ico">content_copy</span>Copiar link de acompanhamento</button>
+        <a class="btn btn-ghost" href="${esc(r.linkAcompanhamento)}" target="_top"><span class="ico">visibility</span>Ver acompanhamento agora</a>
+      </div>
+    </div>`);
+  }catch(e){
+    toast(e.message);btn.disabled=false;btn.innerHTML='<span class="ico">send</span>Enviar solicitação';
+  }
+}
+
+// ── acompanhamento (?pedido=ID&tk=TOKEN) ──
+
+function initPedidoStatus(){
+  // dados embutidos pelo servidor (SSR) — sem google.script.run na abertura
+  if(DADOS_INICIAIS && DADOS_INICIAIS.erro){
+    app('<div class="card" style="text-align:center;padding:44px;margin-top:40px"><span class="ico" style="font-size:44px;color:#CBD5E1">search_off</span><h2 style="justify-content:center;margin-top:10px">Pedido não encontrado</h2><p style="color:var(--muted)">'+esc(DADOS_INICIAIS.erro)+'</p></div>');
+    return;
+  }
+  if(DADOS_INICIAIS && DADOS_INICIAIS.ID){ renderPedidoStatus(DADOS_INICIAIS); return; }
+  app('<div class="card" style="text-align:center;padding:44px;margin-top:40px"><span class="ico" style="font-size:44px;color:#CBD5E1">search_off</span><h2 style="justify-content:center;margin-top:10px">Pedido não encontrado</h2><p style="color:var(--muted)">Link de acompanhamento inválido.</p></div>');
+}
+
+function renderPedidoStatus(p){
+  const ETAPAS = ['Novo','Em análise','Aguardando mais informações','Aceito'];
+  const recusado = p.Status==='Recusado';
+  const cancelado = p.Status==='Cancelado';
+  const idxAtual = ETAPAS.indexOf(p.Status);
+
+  let steps='';
+  if(recusado||cancelado){
+    steps += tlStep('done','check','Novo','Solicitação recebida pela Engenharia');
+    steps += tlStep('rejected','close',p.Status, p.ObservacoesEngenharia||(cancelado?'O pedido foi cancelado.':'A Engenharia optou por não seguir com este pedido.'));
+  } else {
+    ETAPAS.forEach((et,i)=>{
+      const cls = i<idxAtual?'done':(i===idxAtual?'current':'');
+      const ico = i<idxAtual?'check':(i===idxAtual?(et==='Aceito'?'task_alt':'schedule'):'radio_button_unchecked');
+      let desc='';
+      if(et==='Novo') desc='Solicitação recebida pela Engenharia';
+      if(et==='Em análise') desc = i===idxAtual?(p.ObservacoesEngenharia||'A Engenharia está avaliando o pedido.'):'';
+      if(et==='Aguardando mais informações') desc = i===idxAtual?(p.ObservacoesEngenharia||'A Engenharia precisa de mais detalhes seus.'):'';
+      if(et==='Aceito') desc = i===idxAtual?'O pedido virou uma obra formal, acompanhe pelo link abaixo.':'';
+      steps += tlStep(cls,ico,et,desc);
+    });
+  }
+
+  let h = `
+  <header class="pub-topbar"><span class="pt-logo"><img src="${LOGO_HB}" alt="Hospital da Baleia"></span><h1>Acompanhamento da solicitação</h1></header>
+  <div class="ctx-card">
+    <div class="ctx-head"><span class="ico">construction</span>Dados da solicitação</div>
+    <div class="ctx-grid">
+      <div><span class="ctx-lab">Protocolo</span><span class="ctx-val destaque">${esc(p.ID)}</span></div>
+      <div><span class="ctx-lab">Finalidade</span><span class="ctx-val" style="white-space:pre-wrap">${renderMarkdownLite(p.FinalidadeObjetivo)}</span></div>
+      <div><span class="ctx-lab">Solicitante</span><span class="ctx-val">${esc(p.Nome)}<br><small style="color:var(--muted)">${esc(p.Area)}</small></span></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2><span class="ico">timeline</span>Status atual: <span class="pill ${STATUS_PEDIDO_PILL[p.Status]||'pill-rascunho'}" style="margin-left:6px">${esc(p.Status)}</span></h2>
+    <div class="timeline" style="margin-top:14px">${steps}</div>
+    ${p.IDObraGerada?`<div class="banner banner-ok" style="margin-top:16px"><span class="ico">construction</span><span>Sua solicitação virou a obra <b>${esc(p.IDObraGerada)}</b>. <a href="${esc(p.linkObra)}" target="_top" style="color:var(--teal-dark);font-weight:700">Acompanhar a obra e ver manifestações →</a></span></div>`:''}
+  </div>
+  ${p.historico&&p.historico.length?`<div class="card"><h2><span class="ico">forum</span>Conversa com a Engenharia</h2>${historicoHtml(p.historico)}</div>`:''}
+  ${p.Status==='Aguardando mais informações'?`<div class="card" id="respCard"><h2><span class="ico">reply</span>Responder à Engenharia</h2>
+    <div class="banner banner-warn"><span class="ico">info</span><span>A Engenharia precisa de mais informações para seguir com a análise. Sua resposta volta o pedido para análise automaticamente.</span></div>
+    <label>Sua resposta *</label>
+    <textarea id="respTexto" maxlength="3000" placeholder="Escreva aqui as informações solicitadas…"></textarea>
+    <label>Link de evidência <small>(opcional — arquivo no Drive, foto, documento)</small></label>
+    <input type="text" id="respLink" maxlength="500" placeholder="https://…">
+    <div style="margin-top:14px"><button class="btn btn-teal" id="btnResp" onclick="enviarRespostaPedido()"><span class="ico">send</span>Enviar resposta</button></div>
+  </div>`:''}
+  ${['Novo','Em análise','Aguardando mais informações'].indexOf(p.Status)>=0?`<div class="card" style="border-color:rgba(239,68,68,.3)"><h2><span class="ico" style="color:var(--danger)">block</span>Desistir da solicitação</h2>
+    <div id="cancelPedidoWrap">${cancelarPedidoBtnHtml_()}</div>
+  </div>`:''}
+  <div class="footer-note">Protocolo <span class="ref-code">${esc(p.ID)}</span> · Solicitado em ${esc((p.CriadoEm||'').replace('T',' · '))}</div>`;
+  app(h);
+  document.getElementById('app').classList.add('pub-com-topbar');
+  if($('respTexto'))attachFormatToolbar('respTexto');
+}
+
+function cancelarPedidoBtnHtml_(){
+  return `<p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Se você não precisa mais desta obra, pode cancelar a solicitação por aqui.</p>
+    <button class="btn btn-danger" onclick="abrirCancelarPedido()"><span class="ico">block</span>Cancelar minha solicitação</button>`;
+}
+function abrirCancelarPedido(){
+  const wrap=$('cancelPedidoWrap');if(!wrap)return;
+  wrap.innerHTML=`<label>Motivo (opcional)</label>
+    <textarea id="motivoCancelPedido" maxlength="1000" placeholder="conte pra gente por que não precisa mais…"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn btn-danger" id="btnConfirmarCancelPedido" onclick="confirmarCancelarPedido()"><span class="ico">block</span>Confirmar cancelamento</button>
+      <button class="btn btn-ghost" onclick="$('cancelPedidoWrap').innerHTML=cancelarPedidoBtnHtml_()">Voltar</button></div>`;
+}
+async function confirmarCancelarPedido(){
+  if(!confirm('Cancelar esta solicitação? Essa ação não pode ser desfeita.'))return;
+  const motivo=$('motivoCancelPedido')?$('motivoCancelPedido').value.trim():'';
+  const btn=$('btnConfirmarCancelPedido');btn.disabled=true;
+  try{
+    await gs('apiCancelarPedido', PEDIDO_ID, PEDIDO_TOKEN, motivo);
+    toast('Solicitação cancelada.');
+    setTimeout(()=>location.reload(), 900);
+  }catch(e){ toast(e.message); if(btn)btn.disabled=false; }
+}
+
+async function enviarRespostaPedido(){
+  const txt=$('respTexto').value.trim();
+  const link=$('respLink').value.trim();
+  if(!txt){marcarErro(['respTexto']);toast('Escreva a resposta antes de enviar.');return;}
+  // sem regex de barras aqui de propósito — ver comentário de BARRA2 em Constantes
+  if(link&&!linkHttpValido(link)){marcarErro(['respLink']);toast('O link de evidência deve começar com http:'+BARRA2+' ou https:'+BARRA2);return;}
+  const btn=$('btnResp');btn.disabled=true;btn.innerHTML='<span class="ico">hourglass_top</span>Enviando…';
+  try{
+    await gs('apiResponderPedido', PEDIDO_ID, PEDIDO_TOKEN, txt, link);
+    toast('Resposta enviada — o pedido voltou para análise.');
+    // recarrega a página: o servidor re-renderiza com o status novo (SSR)
+    setTimeout(()=>location.reload(), 900);
+  }catch(e){
+    toast(e.message);btn.disabled=false;btn.innerHTML='<span class="ico">send</span>Enviar resposta';
+  }
+}
+</script>

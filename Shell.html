@@ -1,0 +1,176 @@
+<script>
+// ═══════════════════════════ CASCA (shell admin) ═══════════════════════════
+// Sidebar organizada por fases do ciclo de vida da obra (Gestão /
+// Iniciação / Planejamento / Execução e Monitoramento / Encerramento).
+//
+// ROTAS é um registro preenchido pelos módulos de tela (Pedidos.html,
+// Obras.html etc., incluídos nas próximas fases): cada módulo registra
+// ROTAS['pedidos'] = suaFuncaoDeCarregar. Item de menu sem rota
+// registrada cai automaticamente na tela "Em breve" — é assim que a
+// casca fica completa desde já sem depender das telas existirem.
+const ROTAS = {};
+
+// Fase 11: papel Responsável tem sidebar DELIBERADAMENTE reduzida — só
+// "Minhas Atividades" (papeis:['Responsavel'] nesse item). Todos os
+// outros itens ganham papeis:['PMO','Engenharia'] pra ficarem invisíveis
+// pra esse papel (o filtro em montarShell_ já suporta isso, só faltava
+// declarar a restrição em cada item).
+const SIDEBAR_SECOES = [
+  {titulo:'Gestão', itens:[
+    {id:'painel', ico:'space_dashboard', label:'Painel de Controle', sub:'kanban · execução', papeis:['PMO','Engenharia'],
+     desc:'Kanban unificado do ciclo de vida (Pedido → Manifestação → Cronograma → Validado → Em Obra → Finalizado, com Cancelado como saída paralela) e dashboard resumido de execução.'}
+  ]},
+  {titulo:'Iniciação', itens:[
+    {id:'pedidos', ico:'forum', label:'Pedidos', papeis:['PMO','Engenharia'],
+     desc:'Solicitações de obra recebidas das áreas do hospital — análise, conversa com o solicitante e conversão em obra.'},
+    {id:'obras', ico:'domain', label:'Obras', sub:'manifestações', papeis:['PMO','Engenharia'],
+     desc:'Cadastro TAP 5W2H, EAP, publicação e manifestações das áreas.'},
+    {id:'areas', ico:'domain_verification', label:'Áreas propostas', papeis:['PMO','Engenharia'],
+     desc:'Nomes de área novos sugeridos nas manifestações, aguardando decisão do PMO.'}
+  ]},
+  {titulo:'Planejamento', itens:[
+    {id:'cronogramapmo', ico:'timeline', label:'Cronograma', sub:'visão do PMO', papeis:['PMO','Engenharia'],
+     desc:'Fila de validação, cronogramas validados e Gantt — reuniões e Pull Planning ficam dentro de cada obra.'}
+  ]},
+  {titulo:'Execução e Monitoramento', itens:[
+    {id:'execucao', ico:'engineering', label:'Execução', papeis:['PMO','Engenharia'],
+     desc:'Acompanhamento operacional completo das obras em andamento.'},
+    {id:'lookahead', ico:'calendar_view_week', label:'Lookahead Planning', sub:'remoção de impedimentos', papeis:['PMO','Engenharia'],
+     desc:'Janela móvel de 6 semanas revisando as restrições capturadas no Pull Planning até estarem liberadas.'},
+    {id:'compromisso', ico:'fact_check', label:'Compromisso Semanal', sub:'atividades · PPC', papeis:['PMO','Engenharia'],
+     desc:'Escolha semanal do que será executado, com PPC e causa categorizada de não-cumprimento.'},
+    {id:'pagamentos', ico:'payments', label:'Pagamentos', sub:'medição · curva S', papeis:['PMO','Engenharia'],
+     desc:'Plano de pagamento por atividade, medições com evidência, aprovação final do PMO e cronograma físico-financeiro.'}
+  ]},
+  {titulo:'Encerramento', itens:[
+    {id:'encerramento', ico:'verified', label:'Encerramento', sub:'finalizado · cancelado', papeis:['PMO','Engenharia'],
+     desc:'Inspeção técnica, checklist de qualidade, documentos as-built e assinaturas de aceite final.'}
+  ]},
+  {titulo:'Minhas Atividades', itens:[
+    {id:'minhasatividades', ico:'construction', label:'Minhas Atividades', papeis:['Responsavel'],
+     desc:'Pacotes de trabalho sob sua responsabilidade — marque o andamento conforme executa.'}
+  ]},
+  {titulo:'Administração', itens:[
+    {id:'usuarios', ico:'group', label:'Usuários', papeis:['PMO'],
+     desc:'Ativação e gestão dos logins individuais — exclusivo do PMO.'}
+  ]}
+];
+
+let NAV_ATIVO = 'painel';
+
+function navTo(id){
+  NAV_ATIVO = id;
+  const rota = ROTAS[id];
+  if (rota) { rota(); } else { renderEmBreve(id); }
+}
+
+function itemNav_(id){
+  for (const sec of SIDEBAR_SECOES) {
+    const it = sec.itens.find(i=>i.id===id);
+    if (it) return it;
+  }
+  return null;
+}
+
+function papelBadge(){
+  const cor = PAPEL==='PMO' ? ['var(--info-bg)','var(--info)','verified']
+    : PAPEL==='Engenharia' ? ['var(--ok-bg)','var(--teal-dark)','engineering']
+    : ['var(--gold-bg)','#B45309','person_check'];
+  return `<span class="pill" style="background:${cor[0]};color:${cor[1]}"><span class="ico" style="font-size:14px">${cor[2]}</span>${esc(PAPEL)}</span>`;
+}
+
+// Casca PERSISTENTE: topbar+sidebar são montadas UMA vez; navegar só troca
+// o conteúdo interno (#shellConteudo) e a classe .active do menu — sem
+// reconstruir a sidebar, sem recarregar o logo, sem tremor de tela.
+function montarShell_(){
+  const el=document.getElementById('app');
+  if(el.classList.contains('shell-mode') && $('shellConteudo')) return; // já montada
+  const secoes = SIDEBAR_SECOES.map(sec=>{
+    const itens = sec.itens.filter(i=>!i.papeis || i.papeis.indexOf(PAPEL)>=0);
+    if(!itens.length) return '';
+    const links = itens.map(i=>{
+      const label='<span class="nav-label">'+esc(i.label)+(i.sub?'<span class="nav-sub">· '+esc(i.sub)+'</span>':'')+'</span>';
+      const soon=ROTAS[i.id]?'':'<span class="nav-soon">Em breve</span>';
+      return `<a id="nav-${i.id}" href="#" title="${esc(i.label)}" onclick="navTo('${i.id}');return false"><span class="ico">${i.ico}</span>${label}${soon}</a>`;
+    }).join('');
+    return `<div class="sb-section"><div class="sb-section-titulo">${esc(sec.titulo)}</div><nav>${links}</nav></div>`;
+  }).join('');
+
+  el.innerHTML=`<header class="app-topbar"><div class="brand"><span class="brand-logo"><img src="${LOGO_HB}" alt="Hospital da Baleia"></span>Gestão Estratégica de Projetos | PMO</div></header>
+  <aside class="app-sidebar">
+    <button class="sb-toggle" id="sbToggle" title="Recolher/expandir menu" onclick="alternarSidebar_()"><span class="ico">chevron_left</span></button>
+    <div class="sb-nav-scroll">${secoes}</div>
+    <div class="sb-footer">
+      <div class="sb-user"><span class="ico" style="font-size:18px">account_circle</span><span class="sb-user-nome">${esc(NOME)}<span class="sb-user-cargo">${esc(CARGO||'')}</span></span>${papelBadge()}</div>
+      <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;justify-content:center" title="Sair" onclick="fazerLogout()"><span class="ico" style="font-size:15px">logout</span><span class="nav-label">Sair</span></button>
+    </div>
+  </aside>
+  <main class="shell-main" id="shellMain"><div class="shell-inner" id="shellConteudo"></div></main>`;
+  el.classList.add('shell-mode');
+  el.classList.remove('wrap-wide');
+  if(localStorage.getItem('obrasHbSidebarColapsada')==='1'){
+    el.classList.add('sidebar-colapsada');
+    const btn=$('sbToggle'); if(btn) btn.querySelector('.ico').textContent='chevron_right';
+  }
+}
+
+// Recolher/expandir a sidebar (só ícones vs. ícones+texto) — preferência
+// persistida em localStorage, sobrevive a navegação e a novas sessões.
+function alternarSidebar_(){
+  const el=document.getElementById('app');
+  const colapsada = el.classList.toggle('sidebar-colapsada');
+  localStorage.setItem('obrasHbSidebarColapsada', colapsada?'1':'0');
+  const btn=$('sbToggle');
+  if(btn) btn.querySelector('.ico').textContent = colapsada?'chevron_right':'chevron_left';
+}
+
+// SHELL_TELA_ATUAL rastreia a última tela de fato renderizada — a
+// atualização de fundo (stale-while-revalidate) chama renderShell de novo
+// pra MESMA tela quando os dados mudam, e isso não é uma navegação: só
+// re-anima + zera o scroll quando activeNav muda de verdade, senão a
+// tela "pula" sozinha a cada refresh silencioso (2min de cache).
+let SHELL_TELA_ATUAL = null;
+function renderShell(activeNav, innerHtml, wide){
+  const navegou = activeNav !== SHELL_TELA_ATUAL;
+  NAV_ATIVO = activeNav;
+  SHELL_TELA_ATUAL = activeNav;
+  montarShell_();
+  document.querySelectorAll('.app-sidebar nav a').forEach(a=>a.classList.remove('active'));
+  const ativo=$('nav-'+activeNav); if(ativo)ativo.classList.add('active');
+  $('shellMain').classList.toggle('shell-wide',!!wide);
+  const c=$('shellConteudo');
+  c.innerHTML=innerHtml;
+  if(navegou){
+    c.classList.remove('view-enter');void c.offsetWidth;c.classList.add('view-enter');
+    window.scrollTo(0,0);
+  }
+}
+
+function shellHero(crumbRoot,crumbRootOnclick,crumbAtual,titulo,actionsHtml){
+  return `<div class="shell-hero">
+    <nav class="shell-hero-crumb"><a href="#" onclick="${crumbRootOnclick};return false">${crumbRoot}</a><span class="ico">chevron_right</span><span class="current">${crumbAtual}</span></nav>
+    <div class="shell-hero-row">
+      <h1>${titulo}</h1>
+      ${actionsHtml?'<div class="shell-hero-actions">'+actionsHtml+'</div>':''}
+    </div>
+  </div>`;
+}
+
+// Tela-padrão para itens de menu cuja fase de construção ainda não chegou.
+function renderEmBreve(id){
+  const it = itemNav_(id) || {ico:'construction', label:'Em construção', desc:''};
+  const h = `<div class="topbar">
+    <div><div class="eyebrow">Hospital da Baleia · Engenharia e PMO</div><h1 style="font-size:22px">${esc(it.label)}${it.sub?' <span style="font-weight:500;font-size:12px;color:var(--muted)">· '+esc(it.sub)+'</span>':''}</h1></div>
+  </div>
+  <div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">${it.ico}</span>
+    <h2 style="justify-content:center;margin-top:10px">Em breve</h2>
+    <p style="color:var(--muted);max-width:460px;margin:6px auto 0">${esc(it.desc||'Esta tela será ativada numa fase seguinte da construção do novo sistema.')}</p></div>`;
+  renderShell(id, h);
+}
+
+// Home após o login — Responsável cai direto em "Minhas Atividades" (não
+// tem acesso ao Painel de Controle, sidebar reduzida de propósito).
+function renderHome(){
+  navTo(PAPEL==='Responsavel' ? 'minhasatividades' : 'painel');
+}
+</script>

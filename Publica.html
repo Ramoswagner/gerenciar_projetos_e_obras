@@ -1,0 +1,186 @@
+<script>
+// ═══════════════ VISÃO PÚBLICA · OBRA (ciência e manifestação) ═══════════════
+// Design do modelo 2 (topo branco com logo HB, card de contexto com
+// faixa-cabeçalho, formulário em seções com legenda, rodapé em faixa).
+// Dados embutidos pelo servidor (SSR) — abre pronta em 1 viagem; só o
+// ENVIO da manifestação usa google.script.run.
+
+let PUB = null;
+
+function initPublica(){
+  if(DADOS_INICIAIS && DADOS_INICIAIS.erro){
+    app('<div class="card" style="text-align:center;padding:44px;margin-top:40px"><span class="ico" style="font-size:44px;color:#CBD5E1">search_off</span><h2 style="justify-content:center;margin-top:10px">Obra não encontrada</h2><p style="color:var(--muted)">'+esc(DADOS_INICIAIS.erro)+'</p></div>');
+    return;
+  }
+  if(DADOS_INICIAIS && DADOS_INICIAIS.obra){ PUB = DADOS_INICIAIS; renderPublica(); return; }
+  app('<div class="card" style="text-align:center;padding:44px;margin-top:40px"><span class="ico" style="font-size:44px;color:#CBD5E1">search_off</span><h2 style="justify-content:center;margin-top:10px">Obra não encontrada</h2><p style="color:var(--muted)">Link inválido.</p></div>');
+}
+
+const ICO_IMPACTO = {'Demolição':'construction','Ruído':'volume_up','Poeira':'blur_on','Interdição de área':'block','Corte de energia':'bolt','Corte de água':'water_drop','Alteração de fluxo de pessoas/pacientes':'alt_route','Trabalho em altura':'height','Carga estrutural':'weight','Blindagem radiológica':'radiology','Outros':'more_horiz'};
+function nivelEap(cod){return Math.min(String(cod).split('.').length,3);}
+
+function renderPublica(){
+  const o = PUB.obra;
+  const impactos = String(o.Impactos||'').split(';').map(s=>s.trim()).filter(Boolean);
+  const dias = diasRestantes(o.PrazoManifestacao);
+  const noPrazo = dias!=null && dias>=0;
+  const bloqueada = ['Liberada','Em execução','Concluída','Rascunho','Cancelada','Finalizado'].indexOf(o.Status) >= 0;
+  const aberta = !bloqueada;
+  const encerradaFormalmente = o.Status==='Manifestação encerrada' || !noPrazo;
+
+  let prazoTxt;
+  if(!aberta) prazoTxt = 'Manifestações encerradas';
+  else if(o.Status==='Manifestação encerrada') prazoTxt = 'Formalmente encerrada — registros entram como extemporâneos';
+  else if(dias==null) prazoTxt = fmtBr(o.PrazoManifestacao);
+  else if(dias>1) prazoTxt = fmtBr(o.PrazoManifestacao)+' · '+dias+' dias restantes';
+  else if(dias===1) prazoTxt = fmtBr(o.PrazoManifestacao)+' · último dia amanhã';
+  else if(dias===0) prazoTxt = 'HOJE é o último dia';
+  else prazoTxt = 'venceu em '+fmtBr(o.PrazoManifestacao)+' — registros entram como extemporâneos';
+
+  let h = `
+  <header class="pub-topbar"><span class="pt-logo"><img src="${LOGO_HB}" alt="Hospital da Baleia"></span><h1>Ciência e Manifestação de Obra</h1></header>
+  <div class="pub-headline">
+    <h2>${esc(o.Titulo)}</h2>
+    <p>Este registro coleta o parecer formal das áreas impactadas por esta intervenção. Leia o escopo, avalie o impacto na sua área e posicione-se — a manifestação tem valor de posicionamento formal.</p>
+  </div>
+
+  <div class="ctx-card depth-card">
+    <div class="ctx-head"><span class="ico">construction</span>Dados da intervenção</div>
+    <div class="ctx-grid">
+      <div><span class="ctx-lab">ID da obra</span><span class="ctx-val destaque">${esc(o.ID)}</span>
+        <span class="ctx-lab" style="margin-top:10px">Local</span><span class="ctx-val">${esc(o.Setor)}${o.AreasAdjacentes?'<br><small style="color:var(--muted)">Adjacentes: '+esc(o.AreasAdjacentes)+'</small>':''}</span></div>
+      <div><span class="ctx-lab">Descrição resumida</span><span class="ctx-val" style="white-space:pre-wrap">${renderMarkdownLite(o.Descricao)}</span>
+        <span class="ctx-lab" style="margin-top:10px">Janela prevista</span><span class="ctx-val">${fmtBr(o.DataInicio)} a ${fmtBr(o.DataFim)} · resp.: ${esc(o.ResponsavelNome)}${o.ResponsavelCargo?' ('+esc(o.ResponsavelCargo)+')':''}</span></div>
+      <div><span class="ctx-lab">Prazo para manifestação</span><span class="ctx-prazo"><span class="ico">schedule</span>${prazoTxt}</span>
+        ${o.LinkPlanta?'<span class="ctx-lab" style="margin-top:10px">Croqui / planta</span><a href="'+esc(o.LinkPlanta)+'" target="_blank" rel="noopener" style="color:var(--teal-dark);font-weight:600;font-size:12.5px">📐 Abrir documento</a>':''}</div>
+    </div>
+  </div>`;
+
+  if(impactos.length){
+    h += `<div class="card"><h2><span class="ico">warning</span>Impactos previstos — sua área pode ser afetada</h2><div>`;
+    impactos.forEach(i=>{h+=`<span class="chip"><span class="ico">${ICO_IMPACTO[i]||'error'}</span>${esc(i)}</span>`;});
+    h += `</div>${o.DetalhamentoImpactos?'<p style="font-size:13px;margin-top:10px;white-space:pre-wrap">'+renderMarkdownLite(o.DetalhamentoImpactos)+'</p>':''}
+    ${o.HorarioTrabalho?'<p style="font-size:12.5px;color:var(--muted);margin-top:6px"><b>Horário previsto dos trabalhos:</b> '+esc(o.HorarioTrabalho)+'</p>':''}</div>`;
+  }
+
+  h += `<div class="wcard-grid">
+    <div class="wcard"><div class="wlab"><span class="ico">help</span>Por quê</div><p>${renderMarkdownLite(o.Justificativa)||'—'}</p>${o.OrigemDemanda?'<p style="font-size:11.5px;color:var(--muted);margin-top:5px">Origem: '+esc(o.OrigemDemanda)+'</p>':''}</div>
+    <div class="wcard"><div class="wlab"><span class="ico">engineering</span>Quem</div><p><b>${esc(o.ResponsavelNome)}</b>${o.ResponsavelCargo?' · '+esc(o.ResponsavelCargo):''}${o.ResponsavelContato?'\n'+esc(o.ResponsavelContato):''}${o.Execucao?'\nExecução: '+esc(o.Execucao)+(o.EmpresaContratada?' — '+esc(o.EmpresaContratada):''):''}</p></div>
+    ${o.ValorEstimado?'<div class="wcard"><div class="wlab"><span class="ico">payments</span>Quanto</div><p><b>'+esc(o.ValorEstimado)+'</b>'+(o.FonteRecurso?'\nFonte: '+esc(o.FonteRecurso):'')+'</p></div>':(o.FonteRecurso?'<div class="wcard"><div class="wlab"><span class="ico">payments</span>Recurso</div><p>Fonte: <b>'+esc(o.FonteRecurso)+'</b></p></div>':'')}
+    ${o.RestricoesCalendario?'<div class="wcard"><div class="wlab"><span class="ico">event_busy</span>Restrições</div><p>'+esc(o.RestricoesCalendario)+'</p></div>':''}
+  </div>`;
+
+  if(PUB.eap.length){
+    h += `<div class="card" style="margin-top:16px"><h2><span class="ico">account_tree</span>O que será feito — estrutura da obra (EAP)</h2>
+    <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Leia os itens e identifique onde a sua área é impactada. Você poderá apontar itens específicos na manifestação.</p>`;
+    PUB.eap.forEach(e=>{
+      h += `<div class="eap-item nivel${nivelEap(e.Codigo)}"><span class="eap-cod ref-code">${esc(e.Codigo)}</span><span class="eap-desc">${esc(e.Descricao)}</span>${e.NaturezaImpacto?'<span class="eap-nat">'+esc(e.NaturezaImpacto)+'</span>':''}</div>`;
+    });
+    h += `</div>`;
+  }
+
+  // formulário de manifestação
+  if(!aberta){
+    h += `<div class="card" id="formCard"><div class="banner banner-warn" style="margin-bottom:0"><span class="ico">lock</span><span>Esta obra não está mais aberta para manifestação (status: <b>${esc(o.Status)}</b>). Em caso de necessidade, procure a Engenharia/PMO.</span></div></div>`;
+  } else {
+    h += `<div class="form-card depth-card" id="formCard"><div class="form-body">
+    ${encerradaFormalmente?`<div class="banner banner-warn" style="margin-bottom:0"><span class="ico">schedule</span><span>${o.Status==='Manifestação encerrada'?'A manifestação foi formalmente encerrada pela Engenharia/PMO':'O prazo formal encerrou em <b>'+fmtBr(o.PrazoManifestacao)+'</b>'}. Sua manifestação ainda será registrada, marcada como <b>extemporânea</b>.</span></div>`:''}
+    <div class="banner banner-info" style="margin-bottom:0"><span class="ico">info</span><span>${PUB.totalManifestacoes>0?'<b>'+PUB.totalManifestacoes+'</b> manifestação(ões) já registrada(s)'+(PUB.areasQueSePosicionaram.length?': '+esc(PUB.areasQueSePosicionaram.join(', '))+'.':'.'):'Nenhuma área se manifestou ainda — seja a primeira.'}</span></div>
+
+    <h2 class="sec-legend">1. Identificação do responsável</h2>
+    <div class="grid2">
+      <div><label>Nome completo *</label><input type="text" id="mNome" maxlength="120" autocomplete="name"></div>
+      <div><label>Cargo / função *</label><input type="text" id="mCargo" maxlength="120"></div>
+    </div>
+    <label>Área *</label>
+    <select id="mArea" onchange="$('mAreaNovaWrap').style.display=this.value==='Outra'?'block':'none'"><option value="">Selecione…</option>${PUB.areas.map(a=>'<option>'+esc(a)+'</option>').join('')}</select>
+    <div id="mAreaNovaWrap" style="display:none">
+      <label>Nome da sua área <small>— não está na lista? digite; entra para aprovação do PMO e sua manifestação já vale com esse nome</small></label>
+      <input type="text" id="mAreaNova" maxlength="120" placeholder="Ex.: Nutrição Clínica">
+    </div>
+
+    <h2 class="sec-legend">2. Parecer técnico</h2>
+    <label>Posicionamento oficial da área *</label>
+    <div class="radio-cards" id="radioCards">
+      ${radioCard('Ciente sem ressalvas','check_circle','A área tomou ciência e não vê impedimentos ou condições.','ok')}
+      ${radioCard('Ciente com ressalvas','error','De acordo, desde que condições sejam atendidas (detalhar abaixo).','warn')}
+      ${radioCard('Objeção','block','Há impedimento que precisa ser resolvido antes da obra (justificativa obrigatória).','danger')}
+      ${radioCard('Área não impactada','do_not_disturb_on','A área avaliou e não é afetada por esta obra.','neutral')}
+    </div>
+    ${PUB.eap.length?`<label style="margin-top:10px">Itens da EAP relacionados <small>(opcional)</small></label>
+    <div id="mEapChecks">${PUB.eap.filter(e=>nivelEap(e.Codigo)>1||PUB.eap.every(x=>nivelEap(x.Codigo)===1)).map(e=>'<label class="check-line"><input type="checkbox" value="'+esc(e.Codigo)+'"><span><b>'+esc(e.Codigo)+'</b> '+esc(e.Descricao)+'</span></label>').join('')}</div>`:''}
+    <label>Manifestação <span id="manifObrig" style="display:none;color:var(--danger)">*</span> <small>— posicionamento, condições, pontos de atenção</small></label>
+    <textarea id="mTexto" maxlength="5000" placeholder="Escreva aqui o posicionamento da sua área…"></textarea>
+    <div id="reqWrap" style="display:none">
+      <label>Requisitos / condições para a obra acontecer <small>(vira compromisso rastreável do projeto)</small></label>
+      <textarea id="mReq" maxlength="3000" placeholder="Ex.: demolição apenas fora do horário de visita…"></textarea>
+    </div>
+    </div>
+    <div class="form-foot">
+      <span class="ff-nota">Ao enviar, você registra formalmente o parecer da sua área, com data e hora.</span>
+      <button class="btn btn-primary btn-pill" id="btnEnviar" onclick="enviarManifestacao()"><span class="ico" style="font-size:16px">send</span>Registrar manifestação</button>
+    </div>
+    </div>`;
+  }
+  h += `<div class="footer-note">Sistema de ciência e manifestação de obras · ${esc(PUB.instituicao)}</div>`;
+  app(h);
+  document.getElementById('app').classList.add('pub-com-topbar');
+  if(aberta){
+    bindRadios();
+    ativarGuardaFormulario('#formCard input,#formCard select,#formCard textarea');
+    ['mTexto','mReq'].forEach(attachFormatToolbar);
+  }
+}
+
+function radioCard(valor,ico,desc,tone){
+  return `<label class="radio-card" data-tone="${tone}"><input type="radio" name="mPos" value="${esc(valor)}">
+    <span class="rc-title"><span class="ico">${ico}</span>${esc(valor)}</span>
+    <span class="rc-desc">${esc(desc)}</span></label>`;
+}
+
+function bindRadios(){
+  document.querySelectorAll('#radioCards .radio-card input').forEach(inp=>{
+    inp.addEventListener('change',()=>{
+      $('radioCards').classList.remove('field-err');
+      document.querySelectorAll('#radioCards .radio-card').forEach(c=>c.className='radio-card');
+      const card = inp.closest('.radio-card');
+      card.classList.add('sel-'+card.dataset.tone);
+      const precisaTexto = inp.value==='Ciente com ressalvas'||inp.value==='Objeção';
+      $('reqWrap').style.display = precisaTexto?'block':'none';
+      $('manifObrig').style.display = precisaTexto?'inline':'none';
+    });
+  });
+}
+
+async function enviarManifestacao(){
+  const pos = document.querySelector('input[name=mPos]:checked');
+  const dados = {
+    Nome: $('mNome').value, Cargo: $('mCargo').value, Area: $('mArea').value,
+    AreaNovaProposta: $('mArea').value==='Outra' ? $('mAreaNova').value : '',
+    Posicionamento: pos?pos.value:'', Manifestacao: $('mTexto').value,
+    Requisitos: $('reqWrap').style.display!=='none' ? $('mReq').value : '',
+    ItensEAP: Array.from(document.querySelectorAll('#mEapChecks input:checked')||[]).map(c=>c.value).join('; ')
+  };
+  const faltando=[];
+  if(!dados.Nome.trim())faltando.push('mNome');
+  if(!dados.Cargo.trim())faltando.push('mCargo');
+  if(!dados.Area)faltando.push('mArea');
+  if(dados.Area==='Outra'&&!dados.AreaNovaProposta.trim())faltando.push('mAreaNova');
+  if(!dados.Posicionamento)faltando.push('radioCards');
+  if((dados.Posicionamento==='Ciente com ressalvas'||dados.Posicionamento==='Objeção')&&!dados.Manifestacao.trim())faltando.push('mTexto');
+  if(faltando.length){marcarErro(faltando);toast(faltando.indexOf('radioCards')>=0&&faltando.length===1?'Selecione o posicionamento da sua área.':'Preencha os campos destacados em vermelho.');return;}
+  const btn=$('btnEnviar');btn.disabled=true;btn.innerHTML='<span class="ico">hourglass_top</span>Registrando…';
+  try{
+    const r = await gs('apiManifestar', OBRA_ID, dados);
+    desativarGuardaFormulario();
+    $('formCard').innerHTML = `<div style="text-align:center;padding:30px 14px">
+      <span class="ico" style="font-size:52px;color:var(--ok)">task_alt</span>
+      <h2 style="justify-content:center;margin-top:12px">Manifestação registrada</h2>
+      <p style="color:var(--muted);max-width:460px;margin:6px auto 0">O posicionamento de <b>${esc(dados.AreaNovaProposta||dados.Area)}</b> foi formalizado${r.extemporanea?' <b>(fora do prazo — extemporânea)</b>':''} e ficará visível para a Engenharia/PMO com data e hora.${dados.AreaNovaProposta?' Sua área é nova no sistema — o nome foi enviado para aprovação do PMO.':''}</p>
+    </div>`;
+    window.scrollTo({top:$('formCard').offsetTop-20,behavior:'smooth'});
+  }catch(e){
+    toast(e.message);btn.disabled=false;btn.innerHTML='<span class="ico" style="font-size:16px">send</span>Registrar manifestação';
+  }
+}
+</script>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Gestão Estratégica de Projetos | PMO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
+<?!= include('Estilos'); ?>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="loading"><div class="spinner"></div>Carregando…</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const VIEW = '<?= view ?>';
+const OBRA_ID = '<?= obraId ?>';
+const PEDIDO_ID = '<?= pedidoId ?>';
+const PEDIDO_TOKEN = '<?= pedidoToken ?>';
+const DADOS_INICIAIS = <?!= dadosJson ?>; // dados da view pública já renderizados pelo servidor (null no admin)
+</script>
+
+<?!= include('Constantes'); ?>
+<?!= include('RichText'); ?>
+
+<? if (view === 'admin') { ?>
+  <?!= include('Login'); ?>
+  <?!= include('Shell'); ?>
+  <?!= include('PedidosAdmin'); ?>
+  <?!= include('ObrasAdmin'); ?>
+  <?!= include('CronogramaAdmin'); ?>
+  <?!= include('KanbanAdmin'); ?>
+  <?!= include('LookaheadAdmin'); ?>
+  <?!= include('PagamentosAdmin'); ?>
+  <?!= include('CompromissoSemanalAdmin'); ?>
+  <?!= include('EncerramentoAdmin'); ?>
+  <?!= include('MinhasAtividadesAdmin'); ?>
+<? } ?>
+<? if (view === 'pedido_form' || view === 'pedido_status') { ?>
+  <?!= include('PedidoPublico'); ?>
+<? } ?>
+<? if (view === 'publica') { ?>
+  <?!= include('Publica'); ?>
+<? } ?>
+
+<script>
+// ─────────────────────────── boot ───────────────────────────
+// A view pública de obra (?obra=) é portada na Fase 4.2 — até lá, este
+// ambiente DEV mostra um aviso claro em vez de quebrar em silêncio.
+if (VIEW === 'admin') {
+  initAdmin();
+} else if (VIEW === 'pedido_form') {
+  initPedidoForm();
+} else if (VIEW === 'pedido_status') {
+  initPedidoStatus();
+} else if (VIEW === 'publica') {
+  initPublica();
+}
+</script>
+</body>
+</html>

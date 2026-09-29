@@ -1,0 +1,222 @@
+<script>
+// ═══════════════════════════ COMPROMISSO SEMANAL (Fase 9) ═══════════════════════════
+// Last Planner "Weekly Work Plan": PPC da semana atual (gauge) + tendência
+// das últimas 6 semanas + registro de compromissos (com filtro por obra,
+// mesmo padrão de portfólio já validado no Lookahead). Compromisso é
+// criado a partir dos pacotes do cronograma da obra selecionada; marcar
+// Cumprido/Não cumprido é REVERSÍVEL (diferente de Medições, que são
+// decisão financeira definitiva).
+
+ROTAS['compromisso'] = carregarCompromisso;
+
+let COMPROMISSO_DADOS = null;
+let COMPROMISSO_OBRA_FILTRO = '';
+let COMPROMISSO_NOVO_CTX = null;
+
+// Stale-while-revalidate (mesmo padrão de Pedidos/Obras/Kanban/Lookahead/
+// Pagamentos): com cache em memória, renderiza na hora e atualiza por baixo.
+async function carregarCompromisso(){
+  const tinhaCache = !!COMPROMISSO_DADOS;
+  if(tinhaCache){ renderCompromisso(); } else { skeleton('lista'); }
+  try{
+    const frescos = await gs('apiCompromissoSemanal', TOKEN);
+    const mudou = JSON.stringify(frescos)!==JSON.stringify(COMPROMISSO_DADOS);
+    COMPROMISSO_DADOS = frescos;
+    if(!tinhaCache || (mudou && NAV_ATIVO==='compromisso')) renderCompromisso();
+  }catch(e){ if(!tratarErroSessao(e)&&!tinhaCache) toast(e.message); }
+}
+
+function obrasNoCompromisso_(d){
+  const vistos = {};
+  const lista = [];
+  d.compromissos.forEach(c=>{
+    if(!vistos[c.IDObra]){ vistos[c.IDObra]=true; lista.push({ID:c.IDObra, Titulo:c.TituloObra}); }
+  });
+  return lista.sort((a,b)=>a.Titulo.localeCompare(b.Titulo));
+}
+
+function filtrarObraCompromisso_(idObra){
+  COMPROMISSO_OBRA_FILTRO = idObra;
+  renderCompromisso();
+}
+
+function pillStatusCompromisso_(status){
+  if(status==='Cumprido') return 'pill-liberada';
+  if(status==='Não cumprido') return 'pill-recusado';
+  return 'pill-encerrada';
+}
+
+function gaugePPCHtml_(ppc, total){
+  if(ppc==null) return `<div class="stat-card depth-card" style="max-width:260px">
+    <span class="sc-lab">PPC — semana atual</span>
+    <div class="sc-row"><span class="sc-val" style="font-size:20px;color:var(--muted)">Sem dado ainda</span><span class="ico">timelapse</span></div>
+    <span style="font-size:10.5px;color:var(--muted);margin-top:6px;display:block">Nenhum compromisso desta semana foi decidido (Cumprido/Não cumprido) ainda.</span>
+  </div>`;
+  const cor = ppc>=80?'var(--teal-dark)':ppc>=50?'var(--gold)':'var(--danger)';
+  return `<div class="stat-card depth-card" style="max-width:260px">
+    <span class="sc-lab">PPC — semana atual</span>
+    <div class="sc-row"><span class="sc-val" style="color:${cor}">${ppc}%</span><span class="ico" style="color:${cor}">speed</span></div>
+    <div style="width:100%;height:6px;background:var(--bg2);border-radius:999px;overflow:hidden;margin-top:8px"><div style="height:100%;background:${cor};width:${ppc}%"></div></div>
+    <span style="font-size:10.5px;color:var(--muted);margin-top:6px;display:block">${total} compromisso${total===1?'':'s'} nesta semana</span>
+  </div>`;
+}
+
+function semanaTendenciaHtml_(s, idx, ehAtual){
+  const label = ehAtual ? 'Semana atual' : (5-idx)+' sem. atrás';
+  const cor = s.ppc==null ? 'var(--muted)' : s.ppc>=80?'var(--teal-dark)':s.ppc>=50?'var(--gold)':'var(--danger)';
+  return `<div class="cron-resumo-metric" style="text-align:center;min-width:110px${ehAtual?';border-color:var(--teal-dark)':''}">
+    <div style="font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)">${esc(label)}</div>
+    <div style="font-size:15px;font-weight:700;color:var(--navy);margin:4px 0">${intervaloSemanaCurto_(s.inicioIso, s.fimIso)}</div>
+    <div style="font-size:18px;font-weight:800;color:${cor}">${s.ppc==null?'—':s.ppc+'%'}</div>
+    <span style="font-size:10px;color:var(--muted)">${s.total} compromisso${s.total===1?'':'s'}</span>
+  </div>`;
+}
+
+function acoesCompromisso_(c){
+  if(c.Status==='Planejado') return `<button class="btn btn-teal" style="padding:4px 8px;font-size:11px" onclick="marcarCompromissoRapido_('${esc(c.ID)}','Cumprido')">Cumprido</button>
+    <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="abrirNaoCumprido_('${esc(c.ID)}')">Não cumprido</button>
+    <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="excluirCompromisso_('${esc(c.ID)}')" title="Excluir"><span class="ico" style="font-size:14px">delete</span></button>`;
+  return `<button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="marcarCompromissoRapido_('${esc(c.ID)}','Cumprido')">Marcar Cumprido</button>
+    <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="abrirNaoCumprido_('${esc(c.ID)}')">Marcar Não cumprido</button>`;
+}
+
+function linhaCompromisso_(c){
+  return `<tr>
+    <td class="td-quem"><b>${esc(c.Atividade)}</b><small>${esc(c.TituloObra)}</small></td>
+    <td style="white-space:nowrap">${intervaloSemanaCurto_(c.DataInicioSemana, c.DataFimSemana)}</td>
+    <td>${esc(c.ResponsavelNome||'—')}</td>
+    <td><span class="pill ${pillStatusCompromisso_(c.Status)}">${esc(c.Status)}</span>${c.Status==='Não cumprido'&&c.CategoriaNaoCumprimento?'<div style="font-size:10.5px;color:var(--muted);margin-top:3px">'+esc(c.CategoriaNaoCumprimento)+'</div>':''}</td>
+    <td style="white-space:nowrap">${acoesCompromisso_(c)}</td>
+  </tr>`;
+}
+
+function renderCompromisso(){
+  const d = COMPROMISSO_DADOS;
+  const compromissosFiltrados = COMPROMISSO_OBRA_FILTRO ? d.compromissos.filter(c=>c.IDObra===COMPROMISSO_OBRA_FILTRO) : d.compromissos;
+  const obras = obrasNoCompromisso_(d);
+  const opcoesObra = ['<option value=""'+(!COMPROMISSO_OBRA_FILTRO?' selected':'')+'>Todas as obras</option>']
+    .concat(obras.map(o=>'<option value="'+esc(o.ID)+'"'+(COMPROMISSO_OBRA_FILTRO===o.ID?' selected':'')+'>'+esc(o.Titulo)+'</option>'));
+
+  let h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">EXECUÇÃO E MONITORAMENTO</span></div>
+    <h2>Compromisso Semanal</h2>
+    <p class="ph-desc">Escolha semanal do que será executado, com PPC e causa categorizada de não-cumprimento.</p></div>
+    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+      <select id="compromissoObraFiltro" onchange="filtrarObraCompromisso_(this.value)" style="max-width:260px">${opcoesObra.join('')}</select>
+      <button class="btn btn-teal" ${COMPROMISSO_OBRA_FILTRO?'':'disabled title="Selecione uma obra primeiro"'} onclick="abrirNovoCompromisso_()"><span class="ico">add_task</span>Novo compromisso</button>
+    </div>
+  </div>`;
+
+  h += `<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+    ${gaugePPCHtml_(d.ppcSemanaAtual, d.totalSemanaAtual)}
+    <div class="card" style="flex:1;min-width:320px"><h2><span class="ico">trending_up</span>Tendência — últimas 6 semanas</h2>
+      <div style="overflow-x:auto"><div style="display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:10px;margin-top:10px">
+        ${d.tendencia.map((s,i)=>semanaTendenciaHtml_(s,i,s.inicioIso===d.semanaAtualIso)).join('')}
+      </div></div>
+    </div>
+  </div>`;
+
+  h += `<div class="tab-card depth-card"><div class="tc-head"><h3>Registro de Compromissos (${compromissosFiltrados.length})</h3></div>`;
+  if(!compromissosFiltrados.length){
+    h += `<p style="color:var(--muted);font-size:13px;padding:18px 22px">Nenhum compromisso registrado ainda${COMPROMISSO_OBRA_FILTRO?' pra esta obra':''}.</p></div>`;
+  } else {
+    h += `<div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>Atividade</th><th>Semana</th><th>Responsável</th><th>Status</th><th></th></tr></thead>
+      <tbody>${compromissosFiltrados.map(linhaCompromisso_).join('')}</tbody></table></div></div>`;
+  }
+
+  renderShell('compromisso', h, true);
+}
+
+async function marcarCompromissoRapido_(idCompromisso, status){
+  try{
+    await gs('apiMarcarCompromisso', TOKEN, idCompromisso, status);
+    toast('Compromisso marcado: '+status);
+    await carregarCompromisso();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirCompromisso_(idCompromisso){
+  if(!confirm('Excluir este compromisso planejado?')) return;
+  try{
+    await gs('apiExcluirCompromisso', TOKEN, idCompromisso);
+    toast('Compromisso excluído.');
+    await carregarCompromisso();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════ MODAL: MARCAR NÃO CUMPRIDO (categoria + detalhes) ═══════════════
+function abrirNaoCumprido_(idCompromisso){
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalNaoCumprido" onclick="if(event.target===this)fecharNaoCumprido_()">
+    <div class="modal-card" style="max-width:440px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0"><span class="ico">block</span>Marcar Não cumprido</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharNaoCumprido_()"><span class="ico">close</span></button>
+      </div>
+      <label>Categoria *</label><select id="nc_categoria">${opt(CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE, CATEGORIAS_NAO_CUMPRIMENTO_CLIENTE[0])}</select>
+      <label>Detalhes</label><textarea id="nc_detalhes" maxlength="1000" placeholder="o que impediu a execução…"></textarea>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-teal" onclick="confirmarNaoCumprido_('${esc(idCompromisso)}')"><span class="ico">check</span>Confirmar</button>
+      </div>
+    </div>
+  </div>`);
+}
+function fecharNaoCumprido_(){ const m=$('modalNaoCumprido'); if(m) m.remove(); }
+async function confirmarNaoCumprido_(idCompromisso){
+  const categoria = $('nc_categoria').value;
+  const detalhes = $('nc_detalhes').value.trim();
+  try{
+    await gs('apiMarcarCompromisso', TOKEN, idCompromisso, 'Não cumprido', categoria, detalhes);
+    fecharNaoCumprido_();
+    toast('Compromisso marcado: Não cumprido');
+    await carregarCompromisso();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════ MODAL: NOVO COMPROMISSO (escolhe pacote do cronograma) ═══════════════
+async function abrirNovoCompromisso_(){
+  if(!COMPROMISSO_OBRA_FILTRO){ toast('Selecione uma obra primeiro.'); return; }
+  COMPROMISSO_NOVO_CTX = { idObra: COMPROMISSO_OBRA_FILTRO, pacotes: [] };
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalNovoCompromisso" onclick="if(event.target===this)fecharNovoCompromisso_()">
+    <div class="modal-card" style="max-width:460px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0"><span class="ico">add_task</span>Novo compromisso — semana atual</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharNovoCompromisso_()"><span class="ico">close</span></button>
+      </div>
+      <div id="novoCompromissoBody"><p style="color:var(--muted);font-size:13px">Carregando pacotes…</p></div>
+    </div>
+  </div>`);
+  try{
+    const pacotes = await gs('apiPacotesParaComprometer', TOKEN, COMPROMISSO_OBRA_FILTRO);
+    COMPROMISSO_NOVO_CTX.pacotes = pacotes;
+    renderNovoCompromissoBody_();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+function fecharNovoCompromisso_(){ const m=$('modalNovoCompromisso'); if(m) m.remove(); COMPROMISSO_NOVO_CTX=null; }
+function renderNovoCompromissoBody_(){
+  if(!COMPROMISSO_NOVO_CTX) return;
+  const body = $('novoCompromissoBody');
+  if(!body) return;
+  const pacotes = COMPROMISSO_NOVO_CTX.pacotes;
+  if(!pacotes.length){
+    body.innerHTML = '<p style="color:var(--muted);font-size:13px">Todos os pacotes desta obra já têm compromisso na semana atual (ou a obra ainda não tem cronograma).</p>';
+    return;
+  }
+  body.innerHTML = `<label>Pacote de trabalho *</label><select id="nc_pacote">${pacotes.map(p=>'<option value="'+esc(p.ID)+'">'+esc(p.Atividade)+' ('+esc(p.Status)+')</option>').join('')}</select>
+    <label>Responsável</label><input type="text" id="nc_responsavel" maxlength="120" placeholder="quem vai executar">
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-teal" onclick="salvarNovoCompromisso_()"><span class="ico">check</span>Comprometer</button>
+    </div>`;
+}
+async function salvarNovoCompromisso_(){
+  if(!COMPROMISSO_NOVO_CTX) return;
+  const idPacote = $('nc_pacote').value;
+  const responsavel = $('nc_responsavel').value.trim();
+  try{
+    await gs('apiComprometerPacote', TOKEN, COMPROMISSO_NOVO_CTX.idObra, idPacote, responsavel);
+    fecharNovoCompromisso_();
+    toast('Compromisso registrado.');
+    await carregarCompromisso();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+</script>

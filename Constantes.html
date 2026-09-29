@@ -1,0 +1,121 @@
+<script>
+// ─────────────────────────── infra compartilhada ───────────────────────────
+// Portada do App.html do sistema atual. CUIDADO herdado e documentado:
+// nunca escrever regex com a sequência barra-barra literal dentro de
+// arquivos .html deste projeto — o processador de HTML do Apps Script
+// trata como comentário e decapita a linha no HTML servido. Usar \/{2}.
+
+function gs(fn){
+  const args = Array.prototype.slice.call(arguments,1);
+  return new Promise((res,rej)=>{
+    // watchdog: google.script.run falha em silêncio (sem sucesso nem erro)
+    // quando cookies de terceiros estão bloqueados — aba anônima, por ex.
+    let done=false;
+    const t=setTimeout(()=>{
+      if(done)return;done=true;
+      rej(new Error('O servidor não respondeu. Se você estiver em aba anônima ou com cookies de terceiros bloqueados, abra em uma janela normal do navegador e recarregue.'));
+    },30000);
+    google.script.run
+      .withSuccessHandler(v=>{if(done)return;done=true;clearTimeout(t);res(v);})
+      .withFailureHandler(e=>{if(done)return;done=true;clearTimeout(t);rej(new Error(e && e.message ? e.message : String(e)));})
+      [fn].apply(null,args);
+  });
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function $(id){return document.getElementById(id);}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
+function app(html,wide){const el=document.getElementById('app');el.classList.remove('shell-mode');el.innerHTML=html;el.classList.toggle('wrap-wide',!!wide);el.classList.remove('view-enter');void el.offsetWidth;el.classList.add('view-enter');window.scrollTo(0,0);}
+// Com a casca montada, loading/skeleton renderizam DENTRO da área de
+// conteúdo (a sidebar não pisca nem some durante carregamentos).
+function conteudoOuApp_(html){
+  const c=document.getElementById('shellConteudo');
+  if(c && document.getElementById('app').classList.contains('shell-mode')){c.innerHTML=html;}
+  else app(html);
+}
+function loading(msg){conteudoOuApp_('<div class="loading"><div class="spinner"></div>'+esc(msg||'Carregando…')+'</div>');}
+function skeleton(tipo){
+  if(tipo==='lista'){
+    let rows='';
+    for(let i=0;i<4;i++)rows+='<div class="obra-row" style="cursor:default"><div class="sk" style="width:96px;height:16px"></div><div style="flex:1"><div class="sk" style="width:'+(55+i*8)+'%;height:14px;margin-bottom:6px"></div><div class="sk" style="width:32%;height:10px"></div></div><div class="sk" style="width:72px;height:22px;border-radius:999px"></div></div>';
+    conteudoOuApp_('<div class="sk" style="width:200px;height:30px;border-radius:999px;margin-bottom:14px"></div><div class="sk" style="width:260px;height:22px;margin-bottom:18px"></div>'+rows);
+  }else if(tipo==='detalhe'){
+    conteudoOuApp_('<div class="sk" style="width:130px;height:18px;margin-bottom:8px"></div><div class="sk" style="width:45%;height:24px;margin-bottom:18px"></div>'+
+      '<div class="card"><div class="sk" style="width:32%;height:16px;margin-bottom:12px"></div><div class="sk" style="width:100%;height:12px;margin-bottom:7px"></div><div class="sk" style="width:88%;height:12px;margin-bottom:7px"></div><div class="sk" style="width:56%;height:12px"></div></div>'+
+      '<div class="card"><div class="sk" style="width:26%;height:16px;margin-bottom:12px"></div><div class="sk" style="width:92%;height:12px;margin-bottom:7px"></div><div class="sk" style="width:70%;height:12px"></div></div>');
+  }else loading();
+}
+
+// ── datas / moeda ──
+function parseDate(s){s=String(s||'').trim();let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);if(m)return new Date(+m[1],+m[2]-1,+m[3]);m=s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);if(m)return new Date(+m[3],+m[2]-1,+m[1]);return null;}
+function fmtBr(s){const d=parseDate(s);if(!d)return s||'—';return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();}
+function toIso(d){return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);}
+function addDiasUteis(base,n){const d=new Date(base);let add=0;while(add<n){d.setDate(d.getDate()+1);if(d.getDay()!==0&&d.getDay()!==6)add++;}return d;}
+function diasRestantes(prazo){const p=parseDate(prazo);if(!p)return null;p.setHours(23,59,59);const hoje=new Date();return Math.ceil((p-hoje)/86400000);}
+function parseMoeda(s){
+  if(!s) return 0;
+  s = String(s).replace(/[^\d,.-]/g,'');
+  if(!s) return 0;
+  s = /,\d{2}$/.test(s) ? s.replace(/\./g,'').replace(',','.') : s.replace(/,/g,'');
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+function fmtMoeda(n){
+  return 'R$ '+n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function copiar(txt,msg){navigator.clipboard.writeText(txt).then(()=>toast(msg||'Copiado!')).catch(()=>{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast(msg||'Copiado!');});}
+function marcarErro(ids){
+  ids.forEach(id=>{
+    const rich=$(id+'-rich');
+    const el=rich||$(id);if(!el)return;
+    el.classList.add('field-err');
+    const limpar=()=>el.classList.remove('field-err');
+    el.addEventListener('input',limpar,{once:true});
+    if(!rich)el.addEventListener('change',limpar,{once:true});
+  });
+  const primeiro=$(ids[0]+'-rich')||$(ids[0]);
+  if(primeiro&&primeiro.focus)primeiro.focus();
+}
+
+const LOGO_HB = 'https://hospitaldabaleia.org.br/wp-content/uploads/2023/08/Ativo-3@2x.png';
+// Duas barras montadas em runtime — NUNCA escrever regex com \/ nem "//"
+// dentro de string na MESMA LINHA de um regex nos arquivos .html: o
+// processador do Apps Script (rota include()) desanda no regex e trata o
+// resto da linha como comentário, decapitando-a no HTML servido.
+const BARRA2 = String.fromCharCode(47, 47);
+function linkHttpValido(l){
+  l = String(l||'').toLowerCase();
+  return l.indexOf('http:'+BARRA2) === 0 || l.indexOf('https:'+BARRA2) === 0;
+}
+
+const STATUS_PILL = {
+  'Rascunho':'pill-rascunho','Publicada':'pill-publicada','Manifestação encerrada':'pill-encerrada',
+  'Liberada':'pill-liberada','Em execução':'pill-execucao','Concluída':'pill-concluida',
+  'Cancelada':'pill-recusado','Finalizado':'pill-concluida'
+};
+const STATUS_PEDIDO_PILL = {'Novo':'pill-publicada','Em análise':'pill-encerrada','Aguardando mais informações':'pill-encerrada','Aceito':'pill-liberada','Recusado':'pill-recusado','Cancelado':'pill-recusado'};
+
+const URGENCIA_OPCOES = ['Sem urgência definida','Planejado — mais de 3 meses','Necessário em até 3 meses','Urgente — menos de 1 mês'];
+
+// ── helpers de exibição compartilhados (público + admin) ──
+function tlStep(cls,ico,label,desc){
+  return `<div class="timeline-step ${cls}"><div class="timeline-dot"><span class="ico" style="font-size:15px">${ico}</span></div>
+    <div><div class="timeline-label">${esc(label)}</div>${desc?'<div class="timeline-desc">'+renderMarkdownLite(desc)+'</div>':''}</div></div>`;
+}
+function historicoHtml(hist){
+  if(!hist||!hist.length)return '';
+  let s='';
+  hist.forEach(hh=>{
+    const eng=hh.Autor==='Engenharia';
+    s+=`<div class="manif-card">
+      <div class="mc-head">
+        <span class="pill ${eng?'pill-publicada':'pill-liberada'}"><span class="ico" style="font-size:14px">${eng?'engineering':'person'}</span>${eng?'Engenharia e PMO':'Solicitante'}</span>
+        <span class="mc-meta">${esc((hh.CriadoEm||'').replace('T',' · '))}</span>
+      </div>
+      <div class="mc-txt">${renderMarkdownLite(hh.Texto)}</div>
+      ${hh.LinkEvidencia?'<p style="margin-top:6px"><a href="'+esc(hh.LinkEvidencia)+'" target="_blank" rel="noopener" style="color:var(--teal-dark);font-weight:600;font-size:12.5px">📎 Evidência anexada</a></p>':''}
+    </div>`;
+  });
+  return s;
+}
+function opt(list, sel){return list.map(v=>'<option'+(v===sel?' selected':'')+'>'+esc(v)+'</option>').join('');}
+</script>

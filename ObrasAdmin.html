@@ -1,0 +1,686 @@
+<script>
+// ═══════════════════════════ OBRAS (admin) ═══════════════════════════
+// Lista no padrão GovHosp (stat-cards + tabela densa); TAP 5W2H; detalhe
+// com publicação, manifestações, requisitos, decisões de prazo e atas.
+// Cronograma/Gantt entram na Fase 4.3 (botão avisa até lá).
+
+ROTAS['obras'] = carregarLista;
+ROTAS['areas'] = carregarListaAreas;
+
+let OBRAS_CACHE = null;
+let FILTRO_OBRAS = '';
+let DET = null;
+let CTX = null;
+let COBRANCA_MSG = '';
+
+const OBRA_STATUS_META = {
+  'Rascunho':               {cor:'#94A3B8',       bg:'var(--bg2)',       txt:'#475569', ico:'edit_note'},
+  'Publicada':              {cor:'var(--info)',   bg:'var(--info-bg)',   txt:'#1E40AF', ico:'campaign'},
+  'Manifestação encerrada': {cor:'var(--gold)',   bg:'var(--gold-bg)',   txt:'#92400E', ico:'lock_clock'},
+  'Liberada':               {cor:'var(--ok)',     bg:'var(--ok-bg)',     txt:'#065F46', ico:'verified'},
+  'Em execução':            {cor:'var(--teal-dark)',bg:'var(--teal-lt)', txt:'#0F766E', ico:'engineering'},
+  'Concluída':              {cor:'var(--navy)',   bg:'#E2E8F0',          txt:'var(--navy)', ico:'task_alt'},
+  'Cancelada':              {cor:'#6B7280',       bg:'#F3F4F6',          txt:'#374151', ico:'block'},
+  'Finalizado':             {cor:'var(--navy)',   bg:'#E2E8F0',          txt:'var(--navy)', ico:'workspace_premium'}
+};
+function chipObra(status){
+  const m = OBRA_STATUS_META[status]||{bg:'var(--bg2)',txt:'var(--muted)',ico:'radio_button_unchecked'};
+  return `<span class="chip-status" style="background:${m.bg};color:${m.txt}"><span class="ico ico-fill">${m.ico}</span>${esc(status)}</span>`;
+}
+
+async function carregarLista(){
+  const tinha = !!OBRAS_CACHE;
+  if(tinha){ renderLista(); } else { skeleton('lista'); }
+  try{
+    const frescas = await gs('apiListarObras', TOKEN);
+    const mudou = JSON.stringify(frescas)!==JSON.stringify(OBRAS_CACHE);
+    OBRAS_CACHE = frescas;
+    if(!tinha || (mudou && NAV_ATIVO==='obras')) renderLista();
+  }catch(e){ if(!tratarErroSessao(e)&&!tinha)toast(e.message); }
+}
+
+function renderLista(){
+  const obras = OBRAS_CACHE||[];
+  const porStatus = {};
+  obras.forEach(o=>{porStatus[o.Status]=(porStatus[o.Status]||0)+1;});
+  const emManif = (porStatus['Publicada']||0);
+  const objecoesAbertas = obras.filter(o=>o.manif.objecoes>0 && ['Publicada','Manifestação encerrada'].indexOf(o.Status)>=0).length;
+  const visiveis = FILTRO_OBRAS ? obras.filter(o=>o.Status===FILTRO_OBRAS) : obras;
+
+  let h = `<div class="pg-header">
+    <div>
+      <div class="ph-ctx"><span class="ph-chip">INICIAÇÃO</span><span style="font-size:11px;color:var(--muted)">Hospital da Baleia · Engenharia e PMO</span></div>
+      <h2>Obras</h2>
+      <p class="ph-desc">TAP 5W2H, publicação e manifestações das áreas — do rascunho à liberação para execução.</p>
+    </div>
+    <button class="btn btn-primary" onclick="abrirForm(null)"><span class="ico" style="font-size:17px">add</span>Nova obra</button>
+  </div>`;
+
+  if(!obras.length){
+    h += `<div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">domain_add</span>
+      <h2 style="justify-content:center;margin-top:10px">Nenhuma obra cadastrada</h2>
+      <p style="color:var(--muted)">Cadastre a primeira obra para gerar o link de manifestação das áreas.</p></div>`;
+    renderShell('obras', h); return;
+  }
+
+  h += `<div class="stat-grid">
+    <div class="stat-card depth-card" style="cursor:pointer" onclick="FILTRO_OBRAS='';renderLista()">
+      <span class="sc-lab">Total de obras</span>
+      <div class="sc-row"><span class="sc-val">${String(obras.length).padStart(2,'0')}</span><span class="ico">domain</span></div>
+    </div>
+    <div class="stat-card depth-card" style="cursor:pointer" onclick="FILTRO_OBRAS='Publicada';renderLista()">
+      <span class="sc-lab">Em manifestação</span>
+      <div class="sc-row"><span class="sc-val" style="color:var(--info)">${String(emManif).padStart(2,'0')}</span><span class="ico" style="color:var(--info)">how_to_vote</span></div>
+    </div>
+    <div class="stat-card depth-card">
+      <span class="sc-lab">Com objeções em aberto</span>
+      <div class="sc-row"><span class="sc-val" style="color:var(--danger)">${String(objecoesAbertas).padStart(2,'0')}</span><span class="ico" style="color:var(--danger)">warning</span></div>
+    </div>
+  </div>`;
+
+  let linhas='';
+  visiveis.forEach(o=>{
+    const dias = diasRestantes(o.PrazoManifestacao);
+    const prazoTxt = o.Status==='Publicada'&&dias!=null
+      ? (dias>=0 ? 'até '+fmtBr(o.PrazoManifestacao)+' ('+(dias===0?'hoje':dias+'d')+')' : 'venceu '+fmtBr(o.PrazoManifestacao))
+      : '—';
+    const manifTxt = o.manif.total+(o.manif.objecoes?' · <b style="color:var(--danger)">'+o.manif.objecoes+' obj.</b>':'');
+    const cronTxt = o.cronograma ? o.cronograma.concluidos+'/'+o.cronograma.total : '—';
+    linhas += `<tr onclick="abrirDetalhe('${esc(o.ID)}')">
+      <td style="white-space:nowrap"><span class="ref-code">${esc(o.ID)}</span></td>
+      <td class="td-quem"><b>${esc(o.Titulo)}</b><small>${esc(o.Setor||'—')}</small></td>
+      <td>${chipObra(o.Status)}</td>
+      <td style="white-space:nowrap;font-size:12px">${prazoTxt}</td>
+      <td style="white-space:nowrap;font-size:12.5px">${manifTxt}</td>
+      <td style="white-space:nowrap;font-size:12.5px;color:var(--muted)">${cronTxt}</td>
+    </tr>`;
+  });
+  if(!visiveis.length) linhas = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:26px">Nenhuma obra com o filtro "${esc(FILTRO_OBRAS)}".</td></tr>`;
+
+  h += `<div class="tab-card depth-card">
+    <div class="tc-head"><h3>Portfólio de obras${FILTRO_OBRAS?' · '+esc(FILTRO_OBRAS):''}</h3>
+      ${FILTRO_OBRAS?'<button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="FILTRO_OBRAS=\'\';renderLista()"><span class="ico" style="font-size:15px">filter_list_off</span>Limpar filtro</button>':''}
+    </div>
+    <div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>ID</th><th>Obra / Setor</th><th>Status</th><th>Manifestação</th><th>Posições</th><th>Cronograma</th></tr></thead>
+      <tbody>${linhas}</tbody>
+    </table></div>
+  </div>`;
+  renderShell('obras', h, true);
+}
+
+// ── formulário TAP 5W2H ──
+
+async function abrirForm(id){
+  loading('Preparando formulário…');
+  try{
+    let obra=null, eap=[];
+    if(id){
+      const d = await gs('apiGetObraAdmin', TOKEN, id);
+      obra=d.obra; eap=d.eap; CTX={areas:d.areas,setores:d.setores,prazoDiasUteis:d.prazoDiasUteis};
+    } else {
+      CTX = await gs('apiNovaObraContexto', TOKEN);
+    }
+    renderForm(obra, eap);
+  }catch(e){if(!tratarErroSessao(e)){toast(e.message);carregarLista();}}
+}
+
+// Gancho da conversão Pedido→Obra (chamado por PedidosAdmin)
+async function renderFormObraDePedido(idPedido){
+  loading('Preparando obra a partir do pedido…');
+  try{
+    const prefill = await gs('apiPedidoParaObraContexto', TOKEN, idPedido);
+    CTX = await gs('apiNovaObraContexto', TOKEN);
+    renderForm(prefill, []);
+    toast('Revise e complete os dados antes de salvar — EAP, datas e impactos ainda precisam ser preenchidos.');
+  }catch(e){if(!tratarErroSessao(e)){toast(e.message);abrirDetalhePedido(idPedido);}}
+}
+
+const IMPACTOS = ['Demolição','Ruído','Poeira','Interdição de área','Corte de energia','Corte de água','Alteração de fluxo de pessoas/pacientes','Trabalho em altura','Carga estrutural','Blindagem radiológica','Outros'];
+const EAP_TEMPLATES = {
+  'Instalação de equipamento de imagem':[
+    ['1','Serviços preliminares',''],['1.1','Isolamento e proteção da área','Interdição, fluxo'],['1.2','Demolições e retiradas','Ruído, poeira'],
+    ['2','Obra civil',''],['2.1','Alvenaria e vedações','Ruído, poeira'],['2.2','Blindagem radiológica','Radioproteção'],['2.3','Reforço estrutural para o equipamento','Carga estrutural'],
+    ['3','Instalações',''],['3.1','Rede elétrica dedicada e aterramento','Corte de energia'],['3.2','Climatização',''],['3.3','Rede de dados','TI'],
+    ['4','Acabamentos',''],['4.1','Revestimentos e pintura','Odor'],['4.2','Portas e visores plumbíferos',''],
+    ['5','Recebimento do equipamento',''],['5.1','Logística de entrega e içamento','Interdição, fluxo'],['5.2','Instalação e testes do fabricante',''],['5.3','Levantamento radiométrico e liberação','Radioproteção']
+  ],
+  'Reforma de área assistencial':[
+    ['1','Serviços preliminares',''],['1.1','Isolamento e proteção da área (ICRA)','CCIH, interdição'],['1.2','Realocação temporária de atividades','Fluxo assistencial'],
+    ['2','Demolições e retiradas','Ruído, poeira'],
+    ['3','Obra civil e instalações',''],['3.1','Alvenaria, forro e revestimentos','Ruído, poeira'],['3.2','Instalações elétricas e hidráulicas','Cortes programados'],['3.3','Gases medicinais','Assistência'],
+    ['4','Acabamentos e limpeza terminal','CCIH, higienização'],
+    ['5','Vistoria e liberação da área','']
+  ],
+  'Adequação de área administrativa':[
+    ['1','Serviços preliminares',''],['1.1','Isolamento e proteção','Interdição'],['1.2','Realocação de mobiliário e equipes','Fluxo'],
+    ['2','Obra civil','Ruído, poeira'],
+    ['3','Instalações elétricas, lógica e climatização','TI, cortes'],
+    ['4','Acabamentos e mobiliário',''],
+    ['5','Entrega e retorno das equipes','']
+  ]
+};
+
+function renderForm(o, eap){
+  o = o||{};
+  const prazoSugerido = o.PrazoManifestacao || toIso(addDiasUteis(new Date(), CTX.prazoDiasUteis));
+  const impactosSel = String(o.Impactos||'').split(';').map(s=>s.trim()).filter(Boolean);
+  let h = shellHero('Obras','carregarLista()',(o.ID?esc(o.ID)+' · ':'')+'TAP 5W2H',o.ID?'Editar obra':'Cadastrar obra',
+    '<button class="btn btn-ghost" onclick="carregarLista()"><span class="ico">arrow_back</span>Voltar</button>')
+  + `<input type="hidden" id="fIDPedidoOrigem" value="${esc(o.IDPedidoOrigem||'')}">
+  ${o.IDPedidoOrigem?'<div class="banner banner-info"><span class="ico">forum</span><span>Obra criada a partir do pedido <b>'+esc(o.IDPedidoOrigem)+'</b> — os campos vieram pré-preenchidos; revise e complete antes de salvar.</span></div>':''}
+
+  <div class="form-card depth-card"><div class="form-body">
+    <h2 class="sec-legend" style="margin-top:0">1. O quê <small style="font-weight:400;color:var(--muted)">· What</small></h2>
+    <label>Título da intervenção *</label><input type="text" id="fTitulo" maxlength="150" value="${esc(o.Titulo)}" placeholder="Ex.: Adequação de sala para instalação de tomógrafo">
+    <label>Descrição resumida * <small>— 2 a 4 linhas, linguagem acessível a não engenheiros</small></label>
+    <textarea id="fDescricao" maxlength="1200">${esc(o.Descricao)}</textarea>
+
+    <h2 class="sec-legend">2. Por quê <small style="font-weight:400;color:var(--muted)">· Why</small></h2>
+    <label>Justificativa institucional *</label>
+    <textarea id="fJustificativa" maxlength="1200">${esc(o.Justificativa)}</textarea>
+    <label>Origem da demanda</label>
+    <select id="fOrigem">${opt(['','Emenda parlamentar','Manutenção predial','Exigência regulatória','Demanda assistencial','Estratégico','Outra'],o.OrigemDemanda)}</select>
+
+    <h2 class="sec-legend">3. Onde <small style="font-weight:400;color:var(--muted)">· Where</small></h2>
+    <div class="grid2">
+      <div><label>Setor / local principal *</label><select id="fSetor">${opt(['',...CTX.setores],o.Setor)}</select></div>
+      <div><label>Link do croqui / planta <small>(Drive, opcional)</small></label><input type="text" id="fPlanta" value="${esc(o.LinkPlanta)}" placeholder="https:${BARRA2}…"></div>
+    </div>
+    <label>Áreas adjacentes afetadas <small>— corredores, andares, acessos</small></label>
+    <input type="text" id="fAdjacentes" maxlength="300" value="${esc(o.AreasAdjacentes)}">
+
+    <h2 class="sec-legend">4. Quando <small style="font-weight:400;color:var(--muted)">· When</small></h2>
+    <div class="grid2">
+      <div><label>Início previsto *</label><input type="date" id="fInicio" value="${esc(o.DataInicio)}"></div>
+      <div><label>Término previsto *</label><input type="date" id="fFim" value="${esc(o.DataFim)}"></div>
+    </div>
+    <div class="grid2">
+      <div><label>Prazo para manifestação * <small>(sugestão: +${CTX.prazoDiasUteis} dias úteis)</small></label><input type="date" id="fPrazo" value="${esc(prazoSugerido)}"></div>
+      <div><label>Restrições de calendário</label><input type="text" id="fRestricoes" maxlength="300" value="${esc(o.RestricoesCalendario)}"></div>
+    </div>
+
+    <h2 class="sec-legend">5. Quem <small style="font-weight:400;color:var(--muted)">· Who</small></h2>
+    <div class="grid2">
+      <div><label>Responsável na engenharia *</label><input type="text" id="fRespNome" maxlength="120" value="${esc(o.ResponsavelNome)}"></div>
+      <div><label>Cargo</label><input type="text" id="fRespCargo" maxlength="120" value="${esc(o.ResponsavelCargo)}"></div>
+    </div>
+    <div class="grid2">
+      <div><label>Contato <small>(ramal, e-mail, WhatsApp)</small></label><input type="text" id="fRespContato" maxlength="150" value="${esc(o.ResponsavelContato)}"></div>
+      <div><label>Execução</label><select id="fExecucao">${opt(['','Equipe própria','Empresa contratada','Mista'],o.Execucao)}</select></div>
+    </div>
+    <label>Empresa contratada <small>(se aplicável)</small></label>
+    <input type="text" id="fEmpresa" maxlength="150" value="${esc(o.EmpresaContratada)}">
+
+    <h2 class="sec-legend">6. Como <small style="font-weight:400;color:var(--muted)">· How — impactos</small></h2>
+    <div id="fImpactos">${IMPACTOS.map(i=>'<label class="check-line"><input type="checkbox" value="'+esc(i)+'"'+(impactosSel.indexOf(i)>=0?' checked':'')+'><span>'+esc(i)+'</span></label>').join('')}</div>
+    <label>Detalhamento dos impactos</label>
+    <textarea id="fDetImpactos" maxlength="1500">${esc(o.DetalhamentoImpactos)}</textarea>
+    <label>Horário previsto de trabalho</label>
+    <select id="fHorario">${opt(['','Comercial','Noturno','Fim de semana','Comercial + fins de semana','Conforme cronograma detalhado'],o.HorarioTrabalho)}</select>
+
+    <h2 class="sec-legend">7. Quanto <small style="font-weight:400;color:var(--muted)">· How much — visibilidade pública conforme Config</small></h2>
+    <div class="grid2">
+      <div><label>Valor estimado</label><input type="text" id="fValor" maxlength="60" value="${esc(o.ValorEstimado)}" placeholder="R$ …"></div>
+      <div><label>Fonte do recurso</label><select id="fFonte">${opt(['','Emenda parlamentar','Recurso próprio','Convênio','Doação','Misto'],o.FonteRecurso)}</select></div>
+    </div>
+
+    <h2 class="sec-legend">EAP — estrutura analítica <small style="font-weight:400;color:var(--muted)">· 2 níveis bastam</small></h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+      <span style="font-size:12px;color:var(--muted)">Começar de um modelo:</span>
+      ${Object.keys(EAP_TEMPLATES).map(t=>'<button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="aplicarTemplate(\''+esc(t)+'\')">'+esc(t)+'</button>').join('')}
+    </div>
+    <div class="eap-editor-row" style="font-size:11px;font-weight:700;color:var(--muted)"><span>Código</span><span>Descrição do item</span><span class="nat">Natureza do impacto</span><span></span></div>
+    <div id="eapRows"></div>
+    <button class="btn btn-ghost" style="margin-top:2px;align-self:flex-start" onclick="addEapRow()"><span class="ico">add</span>Adicionar item</button>
+  </div>
+  <div class="form-foot">
+    <button class="btn btn-ghost" onclick="carregarLista()">Cancelar</button>
+    <button class="btn btn-primary" id="btnSalvar" onclick="salvarObra('${esc(o.ID||'')}')"><span class="ico" style="font-size:16px">save</span>${o.ID?'Salvar alterações':'Salvar rascunho'}</button>
+  </div></div>`;
+  renderShell('obras', h);
+  ['fDescricao','fJustificativa','fDetImpactos'].forEach(attachFormatToolbar);
+  (eap&&eap.length?eap:[]).forEach(e=>addEapRow(e.Codigo,e.Descricao,e.NaturezaImpacto));
+  if(!eap||!eap.length) addEapRow('1','');
+}
+
+function addEapRow(cod,desc,nat){
+  const div=document.createElement('div');div.className='eap-editor-row';
+  div.innerHTML=`<input type="text" class="e-cod" value="${esc(cod||'')}" placeholder="1.1">
+    <input type="text" class="e-desc" maxlength="300" value="${esc(desc||'')}" placeholder="Descrição do pacote de trabalho">
+    <input type="text" class="e-nat nat" maxlength="200" value="${esc(nat||'')}" placeholder="Ruído, poeira…">
+    <button class="del-btn" title="Remover" onclick="this.parentElement.remove()"><span class="ico" style="font-size:17px">close</span></button>`;
+  $('eapRows').appendChild(div);
+}
+
+function aplicarTemplate(nome){
+  const t=EAP_TEMPLATES[nome];if(!t)return;
+  const rows=$('eapRows');
+  const vazio=Array.from(rows.querySelectorAll('.e-desc')).every(i=>!i.value.trim());
+  if(!vazio && !confirm('Substituir os itens atuais da EAP pelo modelo "'+nome+'"?'))return;
+  rows.innerHTML='';
+  t.forEach(([c,d,n])=>addEapRow(c,d,n));
+  toast('Modelo aplicado — edite à vontade.');
+}
+
+function lerEap(){
+  return Array.from(document.querySelectorAll('#eapRows .eap-editor-row')).map(r=>({
+    Codigo:r.querySelector('.e-cod').value.trim(),
+    Descricao:r.querySelector('.e-desc').value.trim(),
+    NaturezaImpacto:r.querySelector('.e-nat')?r.querySelector('.e-nat').value.trim():''
+  })).filter(e=>e.Codigo&&e.Descricao);
+}
+
+async function salvarObra(id){
+  const dados={
+    ID:id||'',Titulo:$('fTitulo').value,Descricao:$('fDescricao').value,
+    Justificativa:$('fJustificativa').value,OrigemDemanda:$('fOrigem').value,
+    Setor:$('fSetor').value,AreasAdjacentes:$('fAdjacentes').value,LinkPlanta:$('fPlanta').value,
+    DataInicio:$('fInicio').value,DataFim:$('fFim').value,PrazoManifestacao:$('fPrazo').value,
+    RestricoesCalendario:$('fRestricoes').value,
+    ResponsavelNome:$('fRespNome').value,ResponsavelCargo:$('fRespCargo').value,ResponsavelContato:$('fRespContato').value,
+    Execucao:$('fExecucao').value,EmpresaContratada:$('fEmpresa').value,
+    Impactos:Array.from(document.querySelectorAll('#fImpactos input:checked')).map(c=>c.value).join('; '),
+    DetalhamentoImpactos:$('fDetImpactos').value,HorarioTrabalho:$('fHorario').value,
+    ValorEstimado:$('fValor').value,FonteRecurso:$('fFonte').value,
+    IDPedidoOrigem:$('fIDPedidoOrigem').value
+  };
+  if(!dados.Titulo.trim()||!dados.Descricao.trim()||!dados.Setor||!dados.ResponsavelNome.trim()){toast('Preencha título, descrição, setor e responsável.');return;}
+  const btn=$('btnSalvar');btn.disabled=true;
+  try{
+    const r=await gs('apiSalvarObra',TOKEN,dados,lerEap());
+    OBRAS_CACHE=null; PEDIDOS_CACHE=null;
+    if(dados.IDPedidoOrigem){
+      try{ await gs('apiVincularPedidoObra',TOKEN,dados.IDPedidoOrigem,r.id); }catch(e){/* obra salva; vínculo pode ser refeito */}
+      toast('Obra salva e pedido '+dados.IDPedidoOrigem+' vinculado: '+r.id);
+    } else {
+      toast('Obra salva: '+r.id);
+    }
+    abrirDetalhe(r.id);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);btn.disabled=false;}
+}
+
+// ── detalhe ──
+
+async function abrirDetalhe(id){
+  skeleton('detalhe');
+  try{
+    const d=await gs('apiGetObraAdmin',TOKEN,id);
+    renderDetalhe(d);
+  }catch(e){if(!tratarErroSessao(e)){toast(e.message);carregarLista();}}
+}
+
+function btnRastreio(idManif){
+  return '<button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="abrirRastreio(\''+esc(idManif)+'\')"><span class="ico" style="font-size:15px">playlist_add_check</span>Rastrear requisito</button>';
+}
+function abrirRastreio(idManif){
+  const wrap=$('rastreioWrap-'+idManif);if(!wrap)return;
+  wrap.innerHTML='<label style="margin:0 0 4px">Responsável pelo atendimento</label>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
+    '<input type="text" id="rastreioResp-'+esc(idManif)+'" value="Engenharia" maxlength="120" style="max-width:240px">'+
+    '<button class="btn btn-teal" style="padding:6px 13px;font-size:12px" onclick="confirmarRastreio(\''+esc(idManif)+'\')">Confirmar</button>'+
+    '<button class="btn btn-ghost" style="padding:6px 13px;font-size:12px" onclick="fecharRastreio(\''+esc(idManif)+'\')">Cancelar</button></div>';
+  const inp=$('rastreioResp-'+idManif);inp.focus();inp.select();
+}
+function fecharRastreio(idManif){
+  const wrap=$('rastreioWrap-'+idManif);if(wrap)wrap.innerHTML=btnRastreio(idManif);
+}
+async function confirmarRastreio(idManif){
+  const inp=$('rastreioResp-'+idManif);
+  const resp=inp?inp.value.trim():'';
+  if(!resp){marcarErro(['rastreioResp-'+idManif]);return;}
+  const m=((DET&&DET.manifestacoes)||[]).find(x=>x.IDManif===idManif);
+  if(!m||!m.Requisitos){toast('Manifestação sem requisitos para rastrear.');return;}
+  try{
+    await gs('apiCriarRequisito',TOKEN,DET.obra.ID,idManif,m.Requisitos,resp);
+    toast('Requisito rastreado.');
+    abrirDetalhe(DET.obra.ID);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+function btnsRequisito(r){
+  return ['Pendente','Atendido','Recusado'].filter(s=>s!==r.Status).map(s=>
+    '<button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="atualizarRequisito(\''+esc(r.ID)+'\',\''+s+'\',\'\')">Marcar '+s.toLowerCase()+'</button>').join('');
+}
+async function atualizarRequisito(id,novoStatus,obs){
+  try{
+    await gs('apiAtualizarRequisito',TOKEN,id,novoStatus,obs||'');
+    toast('Requisito atualizado: '+novoStatus);
+    abrirDetalhe(DET.obra.ID);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+function copiarCobranca(){copiar(COBRANCA_MSG,'Cobrança copiada — cole no grupo.');}
+
+function renderDetalhe(d){
+  DET=d;
+  const o=d.obra;
+  const dias=diasRestantes(o.PrazoManifestacao);
+  const reqPendentes=(d.requisitos||[]).filter(r=>r.Status==='Pendente').length;
+  const objecoes=d.manifestacoes.filter(m=>m.Posicionamento==='Objeção').length;
+
+  let h=shellHero('Obras','carregarLista()',esc(o.ID),
+    esc(o.Titulo)+' <span style="vertical-align:middle;margin-left:10px">'+chipObra(o.Status)+'</span>',
+    '<button class="btn btn-ghost" onclick="carregarLista()"><span class="ico">arrow_back</span>Voltar</button>'
+    +'<button class="btn btn-ghost" onclick="abrirForm(\''+esc(o.ID)+'\')"><span class="ico">edit</span>Editar</button>'
+    +'<button class="btn btn-ghost" onclick="window.print()"><span class="ico">print</span>Imprimir</button>')
+  + (o.IDPedidoOrigem?'<div class="banner banner-info"><span class="ico">forum</span><span>Obra originada do pedido <span class="ref-code">'+esc(o.IDPedidoOrigem)+'</span>.</span></div>':'');
+
+  // publicação
+  h+=`<div class="card"><h2><span class="ico">campaign</span>Publicação e divulgação</h2>`;
+  if(o.Status==='Rascunho'){
+    h+=`<p style="font-size:13px;color:var(--muted);margin-bottom:12px">A obra está em rascunho. Ao publicar, o link fica ativo e o prazo de manifestação (${fmtBr(o.PrazoManifestacao)||'não definido'}) passa a valer.</p>
+    <button class="btn btn-teal" onclick="publicar('${esc(o.ID)}')"><span class="ico">rocket_launch</span>Publicar obra</button>`;
+  } else {
+    h+=`<div class="linkbox"><span class="ico" style="color:var(--teal-dark)">link</span><span style="flex:1">${esc(d.linkPublico)}</span></div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn btn-ghost" onclick="copiar('${esc(d.linkPublico)}','Link copiado!')"><span class="ico">content_copy</span>Copiar link</button>
+      <button class="btn btn-ghost" onclick="copiarMsgGrupo('${esc(o.ID)}')"><span class="ico">forum</span>Copiar mensagem para o grupo</button>
+      <a class="btn btn-ghost" href="${esc(d.linkPublico)}" target="_blank" rel="noopener"><span class="ico">open_in_new</span>Abrir página pública</a>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:12px;font-weight:700;color:var(--muted)">Mudar status:</span>
+      ${['Publicada','Liberada','Em execução','Concluída'].filter(s=>s!==o.Status).map(s=>'<button class="btn btn-ghost" style="padding:6px 13px;font-size:12px" onclick="mudarStatus(\''+esc(o.ID)+'\',\''+s+'\')">'+s+'</button>').join('')}
+      ${(o.Status==='Publicada'||o.Status==='Manifestação encerrada')?'<button class="btn btn-ghost" style="padding:6px 13px;font-size:12px" onclick="abrirDecisaoPrazo(\''+esc(o.ID)+'\')"><span class="ico" style="font-size:15px">schedule</span>Decidir prazo</button>':''}
+    </div>
+    <div id="decisaoPrazoWrap-${esc(o.ID)}"></div>
+    ${objecoes>0&&(o.Status==='Publicada'||o.Status==='Manifestação encerrada')?'<div class="banner banner-danger" style="margin-top:12px"><span class="ico">block</span><span><b>'+objecoes+' objeção(ões) registrada(s).</b> Recomenda-se resolver antes de liberar a obra.</span></div>':''}
+    ${reqPendentes>0&&o.Status!=='Concluída'?'<div class="banner banner-warn" style="margin-top:12px"><span class="ico">playlist_add_check</span><span><b>'+reqPendentes+' requisito(s) pendente(s).</b> Trate-os antes de liberar a obra.</span></div>':''}`;
+    if(o.Status==='Publicada'&&dias!=null){
+      h+= dias>=0
+        ? `<div class="banner banner-info" style="margin-top:12px"><span class="ico">schedule</span><span>Manifestações abertas até <b>${fmtBr(o.PrazoManifestacao)}</b> (${dias===0?'hoje':dias+' dias'}).</span></div>`
+        : `<div class="banner banner-warn" style="margin-top:12px"><span class="ico">schedule</span><span>Prazo venceu em <b>${fmtBr(o.PrazoManifestacao)}</b> — novas manifestações entram como extemporâneas.</span></div>`;
+    }
+  }
+  h+=`</div>`;
+
+  // decisões de prazo
+  if((d.decisoesPrazo||[]).length){
+    h+=`<div class="card"><h2><span class="ico">history</span>Decisões de prazo</h2>`;
+    d.decisoesPrazo.slice().reverse().forEach(dp=>{
+      h+=`<div class="manif-card"><div class="mc-head">
+        <span class="mc-who">${dp.TipoDecisao==='Estender'?'Prazo estendido':'Manifestação finalizada'} <small>· ${esc(dp.DecididoPor)}</small></span>
+        <span class="mc-meta">${esc((dp.CriadoEm||'').replace('T',' · '))}</span></div>
+        ${dp.TipoDecisao==='Estender'?'<div class="mc-meta">De '+fmtBr(dp.PrazoAnterior)+' para <b>'+fmtBr(dp.PrazoNovo)+'</b></div>':''}
+        <div class="mc-txt">${renderMarkdownLite(dp.Justificativa)}</div></div>`;
+    });
+    h+=`</div>`;
+  }
+
+  // atas
+  h+=`<div class="card"><h2><span class="ico">groups_2</span>Atas — Pull Planning (${(d.atas||[]).length})</h2>
+    <div id="ataFormWrap-${esc(o.ID)}"><button class="btn btn-ghost" onclick="abrirFormAta('${esc(o.ID)}')"><span class="ico">add</span>Registrar ata</button></div>`;
+  (d.atas||[]).slice().reverse().forEach(a=>{
+    h+=`<div class="manif-card" style="margin-top:10px"><div class="mc-head">
+      <span class="mc-who">${esc(a.TipoReuniao)} — ${fmtBr(a.DataReuniao)} <small>· ${esc(a.ConduzidoPor)}</small></span></div>
+      <div class="mc-meta" style="margin-bottom:4px"><b>Participantes:</b> ${esc(a.Participantes)}</div>
+      <div class="mc-txt">${renderMarkdownLite(a.Resumo)}</div></div>`;
+  });
+  h+=`</div>`;
+
+  // cronograma — tela dedicada chega na Fase 4.3
+  {
+    const sc=o.StatusCronograma||'Rascunho';
+    h+=`<div class="card"><h2><span class="ico">timeline</span>Cronograma Mestre</h2>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span class="pill ${sc==='Validado'?'pill-liberada':sc==='Revisão solicitada'?'pill-recusado':sc==='Aguardando validação'?'pill-encerrada':'pill-rascunho'}">${esc(sc)}</span>
+      <span style="font-size:12.5px;color:var(--muted)">${(d.cronograma||[]).length} atividade(s)</span></div>
+      <div style="margin-top:12px"><button class="btn btn-teal" onclick="abrirCronograma('${esc(o.ID)}')"><span class="ico">open_in_new</span>Abrir cronograma</button></div></div>`;
+  }
+
+  // quem falta se manifestar
+  if(o.Status!=='Rascunho'){
+    const ultimaPorArea={};
+    d.manifestacoes.forEach(m=>{ultimaPorArea[m.Area]=m.Posicionamento;});
+    const jaSe=Object.keys(ultimaPorArea);
+    const cobraveis=(d.areas||[]).filter(a=>a!=='Outra');
+    const pendentes=cobraveis.filter(a=>jaSe.indexOf(a)<0);
+    COBRANCA_MSG='Ainda aguardamos manifestação de: '+pendentes.join(', ')+' — obra '+o.ID+' ('+o.Titulo+'), prazo até '+fmtBr(o.PrazoManifestacao)+'.\n'+d.linkPublico;
+    h+=`<div class="card"><h2><span class="ico">groups</span>Quem falta se manifestar</h2>`;
+    if(!pendentes.length){
+      h+=`<div class="banner banner-ok" style="margin-bottom:0"><span class="ico">task_alt</span><span>Todas as áreas configuradas já se posicionaram.</span></div>`;
+    }else{
+      h+=`<p style="font-size:12.5px;color:var(--muted);margin-bottom:6px">${pendentes.length} de ${cobraveis.length} áreas ainda não se posicionaram:</p><div>`;
+      pendentes.forEach(a=>{h+=`<span class="chip">${esc(a)}</span>`;});
+      h+=`</div><div style="margin-top:12px"><button class="btn btn-ghost" onclick="copiarCobranca()"><span class="ico">content_copy</span>Copiar cobrança</button></div>`;
+    }
+    h+=`</div>`;
+  }
+
+  // requisitos
+  if((d.requisitos||[]).length){
+    h+=`<div class="card"><h2><span class="ico">playlist_add_check</span>Requisitos rastreados (${d.requisitos.length})</h2>`;
+    d.requisitos.forEach(r=>{
+      const pill=r.Status==='Atendido'?'pill-liberada':r.Status==='Recusado'?'pill-recusado':'pill-encerrada';
+      h+=`<div class="manif-card"><div class="mc-head">
+        <span class="mc-who"><span class="ref-code">${esc(r.ID)}</span> <small>${r.Responsavel?'· resp.: '+esc(r.Responsavel):''}</small></span>
+        <span class="pill ${pill}">${esc(r.Status)}</span></div>
+        <div class="mc-txt">${renderMarkdownLite(r.Descricao)}</div>
+        ${r.Observacoes?'<div class="mc-meta">Obs.: '+esc(r.Observacoes)+'</div>':''}
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap" id="reqAcoes-${esc(r.ID)}">${btnsRequisito(r)}</div></div>`;
+    });
+    h+=`</div>`;
+  }
+
+  // manifestações — tabela densa GovHosp
+  h+=`<div class="tab-card depth-card" style="margin-bottom:16px">
+    <div class="tc-head"><h3>Relatório de manifestações (${d.manifestacoes.length})</h3></div>`;
+  if(!d.manifestacoes.length){
+    h+=`<p style="color:var(--muted);font-size:13px;padding:18px 22px">Nenhuma manifestação registrada ainda.</p></div>`;
+  } else {
+    const POS_META={'Ciente sem ressalvas':['var(--ok-bg)','#065F46','check'],'Ciente com ressalvas':['var(--gold-bg)','#92400E','info'],'Objeção':['var(--danger-bg)','#991B1B','block'],'Área não impactada':['var(--bg2)','#475569','do_not_disturb_on']};
+    let linhas='';
+    d.manifestacoes.slice().reverse().forEach(m=>{
+      const pm=POS_META[m.Posicionamento]||['var(--bg2)','var(--muted)','help'];
+      const jaRastreada=(d.requisitos||[]).some(r=>r.IDManifOrigem===m.IDManif);
+      linhas+=`<tr>
+        <td class="td-quem"><b>${esc(m.Nome)}</b><small>${esc(m.Cargo)}</small></td>
+        <td>${esc(m.Area)}</td>
+        <td><span class="chip-status" style="background:${pm[0]};color:${pm[1]}"><span class="ico ico-fill">${pm[2]}</span>${esc(m.Posicionamento)}</span>${m.Extemporanea==='SIM'?'<div style="font-size:9.5px;color:var(--danger);font-weight:700;margin-top:3px">EXTEMPORÂNEA</div>':''}</td>
+        <td style="max-width:380px">${m.Manifestacao?'<div style="font-size:12.5px">'+renderMarkdownLite(m.Manifestacao)+'</div>':'<span style="color:var(--muted)">—</span>'}
+          ${m.Requisitos?'<div class="mc-req" style="margin-top:5px"><b>Requisitos:</b> '+renderMarkdownLite(m.Requisitos)+(jaRastreada?' <span class="pill pill-liberada">rastreado</span>':'<div style="margin-top:6px" id="rastreioWrap-'+esc(m.IDManif)+'">'+btnRastreio(m.IDManif)+'</div>')+'</div>':''}
+        </td>
+        <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${esc((m.Timestamp||'').slice(0,10).split('-').reverse().join('/'))}</td>
+      </tr>`;
+    });
+    h+=`<div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>Responsável</th><th>Área</th><th>Posicionamento</th><th>Manifestação / Requisitos</th><th>Data</th></tr></thead>
+      <tbody>${linhas}</tbody></table></div></div>`;
+  }
+
+  // cancelamento — saída paralela de qualquer status anterior a
+  // Finalizado; ação isolada no fim da tela por ser de risco/irreversível
+  if(o.Status==='Cancelada'){
+    h+=`<div class="card" style="border-color:rgba(239,68,68,.3)"><h2><span class="ico" style="color:var(--danger)">block</span>Obra cancelada</h2>
+      <p style="font-size:12.5px;color:var(--muted)">Cancelada por <b>${esc(o.CanceladoPor)}</b> em ${esc((o.DataCancelamento||'').replace('T',' · '))}.</p>
+      ${o.MotivoCancelamento?'<div class="mc-txt" style="margin-top:8px">'+renderMarkdownLite(o.MotivoCancelamento)+'</div>':''}</div>`;
+  } else if(o.Status!=='Finalizado' && (PAPEL==='Engenharia'||PAPEL==='PMO')){
+    h+=`<div class="card" style="border-color:rgba(239,68,68,.3)"><h2><span class="ico" style="color:var(--danger)">block</span>Cancelar obra</h2>
+      <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Cancela a obra permanentemente, fora do fluxo normal de execução. Ação exige justificativa e não pode ser desfeita por aqui.</p>
+      <div id="cancelarObraWrap-${esc(o.ID)}">${cancelarObraBtnHtml_(o.ID)}</div></div>`;
+  }
+
+  renderShell('obras', h, true);
+}
+
+function cancelarObraBtnHtml_(idObra){
+  return `<button class="btn btn-danger" onclick="abrirCancelarObra('${esc(idObra)}')"><span class="ico">block</span>Cancelar obra</button>`;
+}
+function abrirCancelarObra(idObra){
+  const wrap=$('cancelarObraWrap-'+idObra);if(!wrap)return;
+  wrap.innerHTML=`<label>Motivo do cancelamento *</label>
+    <textarea id="justCancelarObra-${idObra}" maxlength="2000" placeholder="explique por que a obra está sendo cancelada…"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn btn-danger" onclick="confirmarCancelarObra('${idObra}')"><span class="ico">block</span>Confirmar cancelamento</button>
+      <button class="btn btn-ghost" onclick="$('cancelarObraWrap-${idObra}').innerHTML=cancelarObraBtnHtml_('${idObra}')">Voltar</button></div>`;
+  attachFormatToolbar('justCancelarObra-'+idObra);
+}
+async function confirmarCancelarObra(idObra){
+  const just=$('justCancelarObra-'+idObra)?$('justCancelarObra-'+idObra).value.trim():'';
+  if(!just){marcarErro(['justCancelarObra-'+idObra]);toast('Explique o motivo do cancelamento.');return;}
+  if(!confirm('Cancelar esta obra? Essa ação encerra o fluxo normal de execução.'))return;
+  try{
+    await gs('apiCancelarObra',TOKEN,idObra,just);
+    OBRAS_CACHE=null;
+    toast('Obra cancelada.');
+    abrirDetalhe(idObra);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+async function publicar(id){
+  loading('Publicando…');
+  try{
+    const r=await gs('apiPublicarObra',TOKEN,id);
+    OBRAS_CACHE=null;
+    copiar(r.mensagemGrupo,'Obra publicada! Mensagem para o grupo copiada — é só colar no WhatsApp.');
+    abrirDetalhe(id);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);abrirDetalhe(id);}
+}
+async function copiarMsgGrupo(id){
+  try{
+    const r=await gs('apiMensagemGrupo',TOKEN,id);
+    copiar(r.mensagemGrupo,'Mensagem copiada — cole no grupo.');
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+async function mudarStatus(id,novo){
+  if(novo==='Liberada'){
+    const reqPend=((DET&&DET.requisitos)||[]).filter(r=>r.Status==='Pendente').length;
+    if(!confirm('Liberar a obra para execução? Confirme que objeções e ressalvas foram tratadas.'+(reqPend?'\n\nATENÇÃO: há '+reqPend+' requisito(s) PENDENTE(s).':'')))return;
+  }
+  try{
+    await gs('apiMudarStatus',TOKEN,id,novo);
+    OBRAS_CACHE=null;
+    toast('Status atualizado: '+novo);
+    abrirDetalhe(id);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+function abrirFormAta(idObra){
+  const wrap=$('ataFormWrap-'+idObra);if(!wrap)return;
+  wrap.innerHTML=`
+    <label>Data da reunião *</label><input type="date" id="ataData-${idObra}">
+    <label>Participantes *</label><textarea id="ataPart-${idObra}" maxlength="2000"></textarea>
+    <label>Resumo da reunião *</label><textarea id="ataResumo-${idObra}" maxlength="5000"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn btn-teal" style="padding:6px 13px;font-size:12px" onclick="confirmarAta('${idObra}')">Salvar ata</button>
+      <button class="btn btn-ghost" style="padding:6px 13px;font-size:12px" onclick="abrirDetalhe('${idObra}')">Cancelar</button></div>`;
+  attachFormatToolbar('ataPart-'+idObra);
+  attachFormatToolbar('ataResumo-'+idObra);
+}
+async function confirmarAta(idObra){
+  const data=$('ataData-'+idObra)?$('ataData-'+idObra).value:'';
+  const part=$('ataPart-'+idObra)?$('ataPart-'+idObra).value.trim():'';
+  const resumo=$('ataResumo-'+idObra)?$('ataResumo-'+idObra).value.trim():'';
+  const faltando=[];
+  if(!data)faltando.push('ataData-'+idObra);
+  if(!part)faltando.push('ataPart-'+idObra);
+  if(!resumo)faltando.push('ataResumo-'+idObra);
+  if(faltando.length){marcarErro(faltando);toast('Preencha os campos destacados.');return;}
+  try{
+    await gs('apiCriarAta',TOKEN,idObra,data,part,resumo);
+    toast('Ata registrada.');
+    abrirDetalhe(idObra);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+function abrirDecisaoPrazo(idObra){
+  const wrap=$('decisaoPrazoWrap-'+idObra);if(!wrap)return;
+  const prazoAtual=(DET&&DET.obra&&DET.obra.PrazoManifestacao)||'';
+  wrap.innerHTML=`<div class="hr"></div>
+    <label>Decisão sobre o prazo <small>— registrada com autoria e justificativa</small></label>
+    <div class="radio-cards" style="grid-template-columns:1fr 1fr">
+      <label class="radio-card" data-tone="ok"><input type="radio" name="tipoDecisaoPrazo" value="Estender" onchange="atualizarFormDecisaoPrazo()"><span class="rc-title"><span class="ico">event_repeat</span>Estender prazo</span><span class="rc-desc">Define uma nova data para a manifestação.</span></label>
+      <label class="radio-card" data-tone="warn"><input type="radio" name="tipoDecisaoPrazo" value="Finalizar" onchange="atualizarFormDecisaoPrazo()"><span class="rc-title"><span class="ico">event_busy</span>Finalizar</span><span class="rc-desc">Encerra a manifestação a partir de agora.</span></label>
+    </div>
+    <div id="novoPrazoWrap-${idObra}" style="display:none">
+      <label>Nova data de prazo *</label>
+      <input type="date" id="novoPrazoInput-${idObra}" value="${esc(prazoAtual)}">
+    </div>
+    <label>Justificativa *</label>
+    <textarea id="justDecisaoPrazo-${idObra}" maxlength="2000"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn btn-teal" style="padding:6px 13px;font-size:12px" onclick="confirmarDecisaoPrazo('${idObra}')">Confirmar decisão</button>
+      <button class="btn btn-ghost" style="padding:6px 13px;font-size:12px" onclick="$('decisaoPrazoWrap-${idObra}').innerHTML=''">Cancelar</button></div>`;
+  attachFormatToolbar('justDecisaoPrazo-'+idObra);
+}
+function atualizarFormDecisaoPrazo(){
+  const tipo=document.querySelector('input[name=tipoDecisaoPrazo]:checked');
+  document.querySelectorAll('input[name=tipoDecisaoPrazo]').forEach(inp=>{
+    const card=inp.closest('.radio-card');
+    card.classList.toggle('sel-'+card.dataset.tone, inp.checked);
+  });
+  const idObra=(DET&&DET.obra&&DET.obra.ID)||'';
+  const wrap=$('novoPrazoWrap-'+idObra);
+  if(wrap)wrap.style.display=(tipo&&tipo.value==='Estender')?'block':'none';
+}
+async function confirmarDecisaoPrazo(idObra){
+  const tipo=document.querySelector('input[name=tipoDecisaoPrazo]:checked');
+  const just=$('justDecisaoPrazo-'+idObra)?$('justDecisaoPrazo-'+idObra).value.trim():'';
+  const novoPrazo=$('novoPrazoInput-'+idObra)?$('novoPrazoInput-'+idObra).value:'';
+  if(!tipo){toast('Escolha Estender ou Finalizar.');return;}
+  const faltando=[];
+  if(tipo.value==='Estender'&&!novoPrazo)faltando.push('novoPrazoInput-'+idObra);
+  if(!just)faltando.push('justDecisaoPrazo-'+idObra);
+  if(faltando.length){marcarErro(faltando);toast('Preencha os campos destacados.');return;}
+  try{
+    await gs('apiDecidirPrazo',TOKEN,idObra,tipo.value,novoPrazo,just);
+    OBRAS_CACHE=null;
+    toast('Decisão registrada.');
+    abrirDetalhe(idObra);
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+
+// ── Áreas propostas ──
+
+async function carregarListaAreas(){
+  skeleton('lista');
+  try{
+    const props = await gs('apiListarAreasPropostas', TOKEN);
+    renderListaAreas(props);
+  }catch(e){ if(!tratarErroSessao(e))toast(e.message); }
+}
+
+function renderListaAreas(props){
+  let h = `<div class="pg-header">
+    <div>
+      <div class="ph-ctx"><span class="ph-chip">INICIAÇÃO</span><span style="font-size:11px;color:var(--muted)">Hospital da Baleia · Engenharia e PMO</span></div>
+      <h2>Áreas propostas${props.length?' · <span style="color:var(--danger)">'+props.length+' pendente(s)</span>':''}</h2>
+      <p class="ph-desc">Nomes de área novos sugeridos nas manifestações públicas — a decisão é do PMO.</p>
+    </div>
+  </div>`;
+  if(!props.length){
+    h += `<div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">domain_verification</span>
+      <h2 style="justify-content:center;margin-top:10px">Nenhuma área pendente</h2>
+      <p style="color:var(--muted)">Propostas nascem quando alguém escolhe "Outra" numa manifestação e digita um nome novo.</p></div>`;
+  }
+  props.forEach(p=>{
+    h += `<div class="manif-card"><div class="mc-head">
+        <span class="mc-who">${esc(p.Nome)} <small>· proposto por ${esc(p.PropostoPor)}${p.CargoPropoente?', '+esc(p.CargoPropoente):''}</small></span>
+        <span class="pill pill-encerrada">Pendente</span></div>
+      <div class="mc-meta">Obra de origem: <span class="ref-code">${esc(p.IDObraOrigem)}</span> · ${esc((p.CriadoEm||'').replace('T',' · '))}</div>
+      ${PAPEL==='PMO'?`<div style="margin-top:10px" id="areaAcoes-${esc(p.ID)}">
+        <button class="btn btn-teal" style="padding:6px 13px;font-size:12px" onclick="abrirDecisaoArea('${esc(p.ID)}',true)">Aprovar</button>
+        <button class="btn btn-ghost" style="padding:6px 13px;font-size:12px" onclick="abrirDecisaoArea('${esc(p.ID)}',false)">Rejeitar</button>
+      </div>`:`<div class="mc-meta" style="margin-top:8px;font-style:italic">Aguardando decisão do PMO.</div>`}
+    </div>`;
+  });
+  renderShell('areas', h);
+}
+
+function abrirDecisaoArea(id,aprovar){
+  const wrap=$('areaAcoes-'+id);if(!wrap)return;
+  wrap.innerHTML='<label style="margin:0 0 4px">Observações '+(aprovar?'(opcional)':'— por que está rejeitando?')+'</label>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
+    '<input type="text" id="areaObs-'+id+'" maxlength="1000" style="max-width:320px">'+
+    '<button class="btn '+(aprovar?'btn-teal':'btn-danger')+'" style="padding:6px 13px;font-size:12px" onclick="confirmarDecisaoArea(\''+id+'\','+aprovar+')">Confirmar</button>'+
+    '<button class="btn btn-ghost" style="padding:6px 13px;font-size:12px" onclick="carregarListaAreas()">Cancelar</button></div>';
+  $('areaObs-'+id).focus();
+}
+async function confirmarDecisaoArea(id,aprovar){
+  const obs=$('areaObs-'+id)?$('areaObs-'+id).value.trim():'';
+  if(!aprovar&&!obs){marcarErro(['areaObs-'+id]);toast('Explique por que está rejeitando.');return;}
+  try{
+    await gs('apiDecidirAreaProposta',TOKEN,id,aprovar,obs);
+    toast(aprovar?'Área aprovada — disponível para novas manifestações.':'Proposta rejeitada.');
+    carregarListaAreas();
+  }catch(e){if(!tratarErroSessao(e))toast(e.message);}
+}
+</script>

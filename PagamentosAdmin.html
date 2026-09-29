@@ -1,0 +1,349 @@
+<script>
+// ═══════════════════════════ PAGAMENTOS (Fase 8) ═══════════════════════════
+// Portfólio de obras com Baseline (só essas podem ter plano de pagamento)
+// -> detalhe de uma obra: pacotes (da Baseline, imutáveis) com parcelas e
+// medições aninhadas + Curva S. Mesmo princípio de tela de portfólio já
+// validado no Lookahead, mas aqui a navegação é sempre resumo -> detalhe
+// (pagamentos não têm sentido agregados sem contexto de uma obra só).
+
+ROTAS['pagamentos'] = carregarPagamentos;
+
+let PAGAMENTOS_RESUMO = null;
+let PAGAMENTOS_OBRA_ATUAL = null;
+let PAGAMENTOS_DETALHE = null;
+let CURVA_S_DADOS = null;
+let PAGAMENTOS_EVID_CTX = null;
+
+// Stale-while-revalidate (mesmo padrão de Pedidos/Obras/Kanban/Lookahead):
+// com cache em memória, renderiza na hora e atualiza por baixo.
+async function carregarPagamentos(){
+  const tinhaCache = !!PAGAMENTOS_RESUMO;
+  PAGAMENTOS_OBRA_ATUAL = null;
+  if(tinhaCache){ renderPagamentosResumo(); } else { skeleton('lista'); }
+  try{
+    const frescos = await gs('apiPagamentosResumo', TOKEN);
+    const mudou = JSON.stringify(frescos)!==JSON.stringify(PAGAMENTOS_RESUMO);
+    PAGAMENTOS_RESUMO = frescos;
+    if(!tinhaCache || (mudou && NAV_ATIVO==='pagamentos' && !PAGAMENTOS_OBRA_ATUAL)) renderPagamentosResumo();
+  }catch(e){ if(!tratarErroSessao(e)&&!tinhaCache) toast(e.message); }
+}
+
+function linhaResumoPagamento_(r){
+  return `<tr>
+    <td><b>${esc(r.Titulo)}</b></td>
+    <td style="white-space:nowrap">${fmtMoeda(r.custoTotalPlanejado)}</td>
+    <td style="white-space:nowrap">${fmtMoeda(r.custoTotalRealizado)}</td>
+    <td>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="width:80px;height:6px;background:var(--bg2);border-radius:999px;overflow:hidden"><div style="height:100%;background:var(--teal-dark);width:${Math.min(r.pctExecutado,100)}%"></div></div>
+        <span style="font-size:12px;font-weight:700">${r.pctExecutado}%</span>
+      </div>
+    </td>
+    <td>${r.qtdMedicoesPendentes ? '<span class="pill pill-encerrada">'+r.qtdMedicoesPendentes+' pendente'+(r.qtdMedicoesPendentes>1?'s':'')+'</span>' : '<span class="pill pill-liberada">em dia</span>'}</td>
+    <td><button class="btn btn-ghost" onclick="abrirPagamentosObra('${esc(r.ID)}')"><span class="ico">visibility</span>Ver</button></td>
+  </tr>`;
+}
+
+function renderPagamentosResumo(){
+  let h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">EXECUÇÃO E MONITORAMENTO</span></div>
+    <h2>Pagamentos</h2>
+    <p class="ph-desc">Plano de pagamento por atividade, medições com evidência, aprovação do PMO e curva S físico-financeira.</p></div>
+  </div>`;
+
+  if(!PAGAMENTOS_RESUMO.length){
+    h += `<div class="card" style="text-align:center;padding:48px"><span class="ico" style="font-size:46px;color:#CBD5E1">payments</span>
+      <h2 style="justify-content:center;margin-top:10px">Nenhuma obra com baseline ainda</h2>
+      <p style="color:var(--muted);max-width:460px;margin:6px auto 0">O plano de pagamento só pode ser criado depois que o cronograma de uma obra for validado ao menos uma vez pelo PMO (é isso que congela a Baseline).</p></div>`;
+    renderShell('pagamentos', h, true);
+    return;
+  }
+
+  h += `<div class="tab-card depth-card"><div class="tc-head"><h3>Obras com plano de pagamento (${PAGAMENTOS_RESUMO.length})</h3></div>
+    <div class="tab-scroll"><table class="tabela-densa">
+      <thead><tr><th>Obra</th><th>Planejado</th><th>Realizado (aprovado)</th><th>% executado</th><th>Medições</th><th></th></tr></thead>
+      <tbody>${PAGAMENTOS_RESUMO.map(linhaResumoPagamento_).join('')}</tbody>
+    </table></div></div>`;
+
+  renderShell('pagamentos', h, true);
+}
+
+async function abrirPagamentosObra(idObra){
+  loading('Carregando pagamentos da obra…');
+  try{
+    const detalhe = await gs('apiPagamentosObra', TOKEN, idObra);
+    const curva = await gs('apiCurvaS', TOKEN, idObra);
+    PAGAMENTOS_OBRA_ATUAL = idObra;
+    PAGAMENTOS_DETALHE = detalhe;
+    CURVA_S_DADOS = curva;
+    renderPagamentosObraDetalhe();
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// Cores fixas (não var() dentro do SVG — mais confiável entre navegadores)
+// espelhando --navy-light/--teal-dark/--border do design system do app.
+function curvaSHtml_(curva){
+  if(!curva.temBaseline || !curva.pontos.length){
+    return `<div class="card"><p style="color:var(--muted);font-size:13px">Sem dados suficientes pra desenhar a curva S ainda.</p></div>`;
+  }
+  const pontos = curva.pontos;
+  const maxValor = Math.max(curva.custoTotalPlanejado, curva.custoTotalRealizado, 1,
+    ...pontos.map(p=>Math.max(p.planejadoAcumulado,p.realizadoAcumulado)));
+  const W = 900, H = 220, PAD = 30;
+  const passoX = pontos.length>1 ? (W-PAD*2)/(pontos.length-1) : 0;
+  const escY = (v)=> H-PAD - (v/maxValor)*(H-PAD*2);
+  const pathPlan = pontos.map((p,i)=> (i===0?'M':'L')+(PAD+i*passoX).toFixed(1)+','+escY(p.planejadoAcumulado).toFixed(1)).join(' ');
+  const pathReal = pontos.map((p,i)=> (i===0?'M':'L')+(PAD+i*passoX).toFixed(1)+','+escY(p.realizadoAcumulado).toFixed(1)).join(' ');
+  return `<div class="card"><h2><span class="ico">show_chart</span>Curva S — físico-financeiro</h2>
+    <div style="display:flex;gap:18px;margin:6px 0 14px;font-size:12.5px;flex-wrap:wrap">
+      <span style="color:var(--muted)">Planejado: <b style="color:var(--navy)">${fmtMoeda(curva.custoTotalPlanejado)}</b></span>
+      <span style="color:var(--muted)">Realizado (aprovado): <b style="color:var(--teal-dark)">${fmtMoeda(curva.custoTotalRealizado)}</b></span>
+    </div>
+    <div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:520px;height:auto;max-height:260px">
+      <line x1="${PAD}" y1="${H-PAD}" x2="${W-PAD}" y2="${H-PAD}" stroke="#E2E8F0" stroke-width="1"/>
+      <path d="${pathPlan}" fill="none" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5,4"/>
+      <path d="${pathReal}" fill="none" stroke="#0D9488" stroke-width="2.5"/>
+    </svg></div>
+    <div style="display:flex;gap:16px;font-size:11px;color:var(--muted);margin-top:6px;flex-wrap:wrap">
+      <span><i style="display:inline-block;width:14px;height:2px;background:#94A3B8;vertical-align:middle;margin-right:4px"></i>Planejado</span>
+      <span><i style="display:inline-block;width:14px;height:2px;background:#0D9488;vertical-align:middle;margin-right:4px"></i>Realizado (aprovado)</span>
+    </div>
+  </div>`;
+}
+
+function pillStatusMedicao_(status){
+  if(status==='Aprovada') return 'pill-liberada';
+  if(status==='Rejeitada') return 'pill-recusado';
+  return 'pill-encerrada';
+}
+
+function linhaMedicaoHtml_(m, evidencias){
+  const acoes = m.StatusAprovacao==='Pendente'
+    ? (PAPEL==='PMO'
+        ? '<button class="btn btn-teal" style="padding:3px 8px;font-size:11px" onclick="decidirMedicao_(\''+esc(m.ID)+'\',true)">Aprovar</button>'+
+          '<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="decidirMedicao_(\''+esc(m.ID)+'\',false)">Rejeitar</button>'
+        : '<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="excluirMedicaoPagamento_(\''+esc(m.ID)+'\')">Excluir</button>')
+    : '';
+  return `<tr>
+    <td style="white-space:nowrap">${fmtMoeda(Number(m.ValorMedido)||0)}</td>
+    <td>${esc(m.RegistradoPor)}</td>
+    <td><span class="pill ${pillStatusMedicao_(m.StatusAprovacao)}">${esc(m.StatusAprovacao)}</span></td>
+    <td><button class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="abrirEvidenciasMedicao_('${esc(m.ID)}')"><span class="ico" style="font-size:13px">attach_file</span>${evidencias.length||0}</button></td>
+    <td style="white-space:nowrap">${acoes}</td>
+  </tr>`;
+}
+
+function parcelaHtml_(parcela, medicoes, evidenciasPorMedicao){
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div><b>Parcela ${esc(parcela.NumeroParcela)}</b> — ${esc(parcela.DescricaoParcela)}
+      <span style="color:var(--muted);font-size:12px"> · previsto ${fmtMoeda(Number(parcela.ValorPrevisto)||0)}</span></div>
+      <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="abrirNovaMedicao_('${esc(parcela.ID)}')"><span class="ico" style="font-size:14px">add_task</span>Registrar medição</button>
+    </div>
+    ${medicoes.length ? `<table class="tabela-densa" style="margin-top:10px">
+      <thead><tr><th>Valor medido</th><th>Registrado por</th><th>Status</th><th>Evid.</th><th></th></tr></thead>
+      <tbody>${medicoes.map(m=>linhaMedicaoHtml_(m, evidenciasPorMedicao[m.ID]||[])).join('')}</tbody>
+    </table>` : '<p style="color:var(--muted);font-size:12px;margin-top:8px">Nenhuma medição registrada ainda.</p>'}
+  </div>`;
+}
+
+function pacotePagamentoHtml_(pac, parcelas, medicoesPorParcela, evidenciasPorMedicao){
+  const custoPacote = (Number(pac.CustoDoacao)||0)+(Number(pac.CustoProprio)||0);
+  return `<div class="tab-card depth-card" style="margin-top:14px">
+    <div class="tc-head">
+      <h3>${esc(pac.Atividade)}</h3>
+      <div style="display:flex;gap:10px;align-items:center">
+        <span style="font-size:12px;color:var(--muted)">Baseline: ${fmtMoeda(custoPacote)}</span>
+        <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="abrirNovaParcela_('${esc(pac.IDPacote)}')"><span class="ico" style="font-size:15px">add</span>Nova parcela</button>
+      </div>
+    </div>
+    <div style="padding:14px 22px">
+      ${parcelas.length ? parcelas.map(p=>parcelaHtml_(p, medicoesPorParcela[p.ID]||[], evidenciasPorMedicao)).join('') : '<p style="color:var(--muted);font-size:13px">Nenhuma parcela cadastrada ainda pra este pacote.</p>'}
+    </div>
+  </div>`;
+}
+
+function renderPagamentosObraDetalhe(){
+  const d = PAGAMENTOS_DETALHE;
+  const parcelasPorPacote = {};
+  d.parcelas.forEach(p=>{ (parcelasPorPacote[p.IDPacote]=parcelasPorPacote[p.IDPacote]||[]).push(p); });
+  const medicoesPorParcela = {};
+  d.medicoes.forEach(m=>{ (medicoesPorParcela[m.IDParcela]=medicoesPorParcela[m.IDParcela]||[]).push(m); });
+  const evidenciasPorMedicao = {};
+  d.evidencias.forEach(e=>{ (evidenciasPorMedicao[e.IDMedicao]=evidenciasPorMedicao[e.IDMedicao]||[]).push(e); });
+
+  let h = `<div class="pg-header">
+    <div><div class="ph-ctx"><span class="ph-chip">EXECUÇÃO E MONITORAMENTO</span><span class="ref-code">${esc(d.obra.ID)}</span></div>
+    <h2>Pagamentos — ${esc(d.obra.Titulo)}</h2>
+    <p class="ph-desc">Baseline congelada com ${d.baseline.length} pacote${d.baseline.length===1?'':'s'} de trabalho.</p></div>
+    <button class="btn btn-ghost" onclick="carregarPagamentos()"><span class="ico">arrow_back</span>Voltar</button>
+  </div>`;
+
+  h += curvaSHtml_(CURVA_S_DADOS);
+  h += d.baseline.map(pac => pacotePagamentoHtml_(pac, parcelasPorPacote[pac.IDPacote]||[], medicoesPorParcela, evidenciasPorMedicao)).join('');
+
+  renderShell('pagamentos', h, true);
+}
+
+// ═══════════════════ MODAL: NOVA PARCELA ═══════════════════
+function abrirNovaParcela_(idPacote){
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalParcela" onclick="if(event.target===this)fecharModalParcela_()">
+    <div class="modal-card" style="max-width:420px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0"><span class="ico">payments</span>Nova parcela</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharModalParcela_()"><span class="ico">close</span></button>
+      </div>
+      <label>Descrição *</label><input type="text" id="pg_desc" maxlength="200" placeholder="ex.: Adiantamento, Entrega final...">
+      <label>Valor previsto *</label><input type="text" id="pg_valor" placeholder="R$">
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-teal" onclick="salvarParcelaPagamento_('${esc(idPacote)}')"><span class="ico">check</span>Salvar</button>
+      </div>
+    </div>
+  </div>`);
+}
+function fecharModalParcela_(){ const m=$('modalParcela'); if(m) m.remove(); }
+async function salvarParcelaPagamento_(idPacote){
+  const desc = $('pg_desc').value.trim();
+  const valor = $('pg_valor').value.trim();
+  if(!desc){ toast('Descreva a parcela.'); return; }
+  try{
+    await gs('apiSalvarParcela', TOKEN, { IDObra: PAGAMENTOS_OBRA_ATUAL, IDPacote: idPacote, DescricaoParcela: desc, ValorPrevisto: valor });
+    fecharModalParcela_();
+    toast('Parcela criada.');
+    await abrirPagamentosObra(PAGAMENTOS_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════════ MODAL: NOVA MEDIÇÃO ═══════════════════
+function abrirNovaMedicao_(idParcela){
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalMedicao" onclick="if(event.target===this)fecharModalMedicao_()">
+    <div class="modal-card" style="max-width:460px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0"><span class="ico">add_task</span>Registrar medição</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharModalMedicao_()"><span class="ico">close</span></button>
+      </div>
+      <label>Valor medido *</label><input type="text" id="md_valor" placeholder="R$">
+      <label>Descrição da evidência</label><textarea id="md_desc_evid" maxlength="500" placeholder="ex.: nota fiscal nº..., referente a..."></textarea>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-teal" onclick="salvarMedicaoPagamento_('${esc(idParcela)}')"><span class="ico">check</span>Registrar</button>
+      </div>
+    </div>
+  </div>`);
+}
+function fecharModalMedicao_(){ const m=$('modalMedicao'); if(m) m.remove(); }
+async function salvarMedicaoPagamento_(idParcela){
+  const valor = $('md_valor').value.trim();
+  const descEvid = $('md_desc_evid').value.trim();
+  const parcela = PAGAMENTOS_DETALHE.parcelas.find(p=>p.ID===idParcela);
+  if(!parcela){ toast('Parcela não encontrada.'); return; }
+  try{
+    await gs('apiRegistrarMedicao', TOKEN, { IDObra: PAGAMENTOS_OBRA_ATUAL, IDPacote: parcela.IDPacote, IDParcela: idParcela, ValorMedido: valor, DescricaoEvidencia: descEvid });
+    fecharModalMedicao_();
+    toast('Medição registrada.');
+    await abrirPagamentosObra(PAGAMENTOS_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function decidirMedicao_(idMedicao, aprovado){
+  const obs = aprovado ? '' : (prompt('Motivo da rejeição (opcional):') || '');
+  try{
+    await gs('apiAprovarMedicao', TOKEN, idMedicao, aprovado, obs);
+    toast(aprovado ? 'Medição aprovada.' : 'Medição rejeitada.');
+    await abrirPagamentosObra(PAGAMENTOS_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirMedicaoPagamento_(idMedicao){
+  if(!confirm('Excluir esta medição pendente?')) return;
+  try{
+    await gs('apiExcluirMedicao', TOKEN, idMedicao);
+    toast('Medição excluída.');
+    await abrirPagamentosObra(PAGAMENTOS_OBRA_ATUAL);
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+// ═══════════════════ MODAL: EVIDÊNCIAS DA MEDIÇÃO (upload OU link) ═══════════════════
+function abrirEvidenciasMedicao_(idMedicao){
+  PAGAMENTOS_EVID_CTX = { idMedicao: idMedicao };
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-backdrop" id="modalEvidMedicao" onclick="if(event.target===this)fecharModalEvidMedicao_()">
+    <div class="modal-card" style="max-width:520px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0"><span class="ico">attach_file</span>Evidências da medição</h2>
+        <button class="btn btn-ghost" style="padding:6px 10px" onclick="fecharModalEvidMedicao_()"><span class="ico">close</span></button>
+      </div>
+      <div id="evidMedicaoLista"></div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--border)">
+        <label style="margin-top:0">Upload de arquivo <small>(até 8MB)</small></label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="pg_evid_file" style="max-width:220px">
+          <button type="button" class="btn btn-ghost" onclick="enviarEvidenciaMedicao_()"><span class="ico" style="font-size:15px">upload</span>Enviar</button>
+        </div>
+        <label>Ou cole um link</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="pg_evid_link_desc" placeholder="descrição" style="max-width:160px">
+          <input type="text" id="pg_evid_link_url" placeholder="https://..." style="flex:1;min-width:160px">
+          <button type="button" class="btn btn-ghost" onclick="anexarLinkEvidenciaMedicao_()"><span class="ico" style="font-size:15px">link</span>Anexar</button>
+        </div>
+      </div>
+    </div>
+  </div>`);
+  renderEvidenciasMedicaoModal_();
+}
+
+function fecharModalEvidMedicao_(){
+  const m = $('modalEvidMedicao');
+  if(m) m.remove();
+  PAGAMENTOS_EVID_CTX = null;
+  renderPagamentosObraDetalhe(); // atualiza o contador de evidências na tabela por trás
+}
+
+function renderEvidenciasMedicaoModal_(){
+  if(!PAGAMENTOS_EVID_CTX) return;
+  const lista = (PAGAMENTOS_DETALHE.evidencias||[]).filter(e=>e.IDMedicao===PAGAMENTOS_EVID_CTX.idMedicao);
+  const el = $('evidMedicaoLista');
+  if(!el) return;
+  el.innerHTML = lista.length ? lista.map(ev=>`<div class="evid-item">
+      <a href="${esc(ev.Link)}" target="_blank" rel="noopener"><span class="ico" style="font-size:15px">${ev.Tipo==='Upload'?'description':'link'}</span>${esc(ev.NomeOuDescricao)}</a>
+      <button class="btn btn-ghost" style="padding:2px 6px;font-size:11px" onclick="excluirEvidenciaMedicaoModal_('${esc(ev.ID)}')" title="Excluir"><span class="ico" style="font-size:13px">delete</span></button>
+    </div>`).join('') : '<p style="font-size:12px;color:var(--muted);margin:4px 0 8px">Nenhuma evidência anexada ainda.</p>';
+}
+
+async function enviarEvidenciaMedicao_(){
+  if(!PAGAMENTOS_EVID_CTX) return;
+  const input = $('pg_evid_file');
+  const file = input && input.files && input.files[0];
+  if(!file){ toast('Selecione um arquivo.'); return; }
+  if(file.size > 8*1024*1024){ toast('Arquivo maior que 8MB — reduza antes de enviar.'); return; }
+  try{
+    toast('Enviando evidência…');
+    const base64 = await lerArquivoBase64_(file);
+    const r = await gs('apiUploadEvidenciaMedicao', TOKEN, PAGAMENTOS_EVID_CTX.idMedicao, file.name, file.type||'application/octet-stream', base64);
+    PAGAMENTOS_DETALHE.evidencias.push(r.evidencia);
+    renderEvidenciasMedicaoModal_();
+    toast('Evidência enviada.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function anexarLinkEvidenciaMedicao_(){
+  if(!PAGAMENTOS_EVID_CTX) return;
+  const desc = $('pg_evid_link_desc').value.trim();
+  const url = $('pg_evid_link_url').value.trim();
+  try{
+    const r = await gs('apiAnexarLinkEvidenciaMedicao', TOKEN, PAGAMENTOS_EVID_CTX.idMedicao, desc, url);
+    PAGAMENTOS_DETALHE.evidencias.push(r.evidencia);
+    $('pg_evid_link_desc').value=''; $('pg_evid_link_url').value='';
+    renderEvidenciasMedicaoModal_();
+    toast('Link anexado.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+
+async function excluirEvidenciaMedicaoModal_(idEvidencia){
+  if(!confirm('Excluir esta evidência?')) return;
+  try{
+    await gs('apiExcluirEvidenciaMedicao', TOKEN, idEvidencia);
+    PAGAMENTOS_DETALHE.evidencias = PAGAMENTOS_DETALHE.evidencias.filter(e=>e.ID!==idEvidencia);
+    renderEvidenciasMedicaoModal_();
+    toast('Evidência excluída.');
+  }catch(e){ if(!tratarErroSessao(e)) toast(e.message); }
+}
+</script>
