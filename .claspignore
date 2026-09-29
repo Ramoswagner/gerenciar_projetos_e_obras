@@ -1,0 +1,6 @@
+# Só o código do Apps Script sobe no `clasp push`: testes, documentação e
+# ferramentas locais ficam de fora (tests/*.js quebraria o projeto se subisse).
+**/**
+!appsscript.json
+!*.gs
+!*.html

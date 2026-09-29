@@ -1,0 +1,8 @@
+{
+  "name": "gerenciar-projetos-e-obras",
+  "private": true,
+  "description": "Gestão de projetos e obras — Hospital da Baleia (Google Apps Script)",
+  "scripts": {
+    "test": "node tests/run.js"
+  }
+}

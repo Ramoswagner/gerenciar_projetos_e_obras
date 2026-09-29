@@ -1,0 +1,247 @@
+/**
+ * Testes do servidor rodando no Node com o simulador (tests/gas-mock.js).
+ * Uso: `node tests/run.js` (ou `npm test`). Cada teste recebe um ambiente
+ * novo (planilha vazia), carrega todos os .gs como o Apps Script faz
+ * (escopo global único) e exercita as APIs de verdade.
+ */
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const assert = require('assert');
+const { criarAmbiente } = require('./gas-mock');
+
+const RAIZ = path.join(__dirname, '..');
+// Setup.gs primeiro: define as constantes de schema usadas pelos outros arquivos.
+const ARQUIVOS = fs.readdirSync(RAIZ).filter(f => f.endsWith('.gs'))
+  .sort((a, b) => (a === 'Setup.gs' ? -1 : b === 'Setup.gs' ? 1 : a.localeCompare(b)));
+const FONTE = ARQUIVOS.map(f => fs.readFileSync(path.join(RAIZ, f), 'utf8')).join('\n;\n');
+
+// Carrega o sistema num ambiente novo. `exporta` devolve as funções/constantes
+// globais que o teste quer usar (const/let de topo não viram propriedade do
+// contexto, então são expostas por uma função auxiliar).
+function carregar(opcoes) {
+  const amb = criarAmbiente(opcoes);
+  const ctx = vm.createContext(Object.assign({}, amb.globais));
+  vm.runInContext(FONTE + '\n;globalThis.__g = (n) => eval(n);', ctx, { filename: 'sistema.gs' });
+  const g = (nome) => ctx.__g(nome);
+  return { amb, g };
+}
+
+// Ambiente pronto: abas criadas e um PMO com senha conhecida logado.
+function sistemaComPmo() {
+  const s = carregar();
+  s.g('setup')();
+  s.g('semearPrimeiroPmo')();
+  const email = 'nucleodeprojetos@hospitaldabaleia.org.br';
+  const sh = s.amb.aba('Usuarios');
+  const H = s.g('USUARIOS_HEADERS');
+  sh.data[1][H.indexOf('SenhaHash')] = s.g('hashSenha_')('senha-teste');
+  s.token = s.g('login')(email, 'senha-teste').token;
+  return s;
+}
+
+function criarUsuario(s, papel, email) {
+  s.g('apiSalvarUsuario')(s.token, { Nome: papel + ' Teste', Email: email, Cargo: 'Teste', Papel: papel, Senha: 'senha-' + papel });
+  return s.g('login')(email, 'senha-' + papel).token;
+}
+
+const testes = [];
+const teste = (nome, fn) => testes.push({ nome, fn });
+
+// ─────────────────────────────── segurança ───────────────────────────────
+
+teste('funções de manutenção recusam chamada de fora do editor', () => {
+  const s = carregar({ usuarioAtivo: '' }); // visitante anônimo do web app
+  ['semearPrimeiroPmo', 'setup', 'backupSemanal', 'instalarTriggerBackup', 'criarProjetosExemplo',
+   'migrarCustoParaNumero', 'testAuth', 'diagnosticarCronograma'].forEach(fn => {
+    assert.throws(() => s.g(fn)(), /editor/i, fn + ' deveria exigir o editor');
+  });
+  const outro = carregar({ usuarioAtivo: 'visitante@hospital.org' });
+  assert.throws(() => outro.g('semearPrimeiroPmo')(), /editor/i);
+});
+
+teste('funções de manutenção funcionam pelo editor (dono)', () => {
+  const s = carregar();
+  s.g('setup')();
+  const msg = s.g('semearPrimeiroPmo')();
+  assert.match(msg, /senha tempor/);
+});
+
+teste('papel Responsavel não chama APIs de equipe', () => {
+  const s = sistemaComPmo();
+  const tResp = criarUsuario(s, 'Responsavel', 'resp@hospital.org');
+  const bloqueadas = [
+    ['apiListarObras'], ['apiGetObraAdmin', 'OBR-X'], ['apiSalvarObra', { Titulo: 'x' }, []],
+    ['apiPublicarObra', 'OBR-X'], ['apiMudarStatus', 'OBR-X', 'Publicada'], ['apiListarPedidos'],
+    ['apiAtualizarStatusPedido', 'PED-X', 'Aceito', ''], ['apiVincularPedidoObra', 'PED-X', 'OBR-X'],
+    ['apiKanban'], ['apiLookahead'], ['apiPagamentosResumo'], ['apiCriarRequisito', 'OBR-X', '', 'x', ''],
+    ['apiAtualizarRequisito', 'R-X', 'Atendido', ''], ['apiEncerramentoResumo'], ['apiCompromissoSemanal'],
+    ['apiListarAreasPropostas'], ['apiGetBaseline', 'OBR-X'], ['apiCurvaS', 'OBR-X']
+  ];
+  bloqueadas.forEach(([fn, ...args]) => {
+    assert.throws(() => s.g(fn)(tResp, ...args), /restrita/i, fn + ' deveria bloquear o papel Responsavel');
+  });
+  // o que é dele continua funcionando
+  assert.strictEqual(s.g('apiMeusPacotes')(tResp).length, 0);
+});
+
+teste('PMO rebaixado ou desativado perde o acesso na hora (sessão antiga cai)', () => {
+  const s = sistemaComPmo();
+  const tB = criarUsuario(s, 'PMO', 'pmo2@hospital.org');
+  const B = s.g('apiListarUsuarios')(s.token).find(u => u.Email === 'pmo2@hospital.org');
+  assert.ok(s.g('apiListarUsuarios')(tB).length >= 2, 'B começa como PMO');
+  s.g('apiSalvarUsuario')(s.token, { ID: B.ID, Nome: B.Nome, Email: B.Email, Cargo: '', Papel: 'Engenharia', Status: 'ativo' });
+  assert.throws(() => s.g('apiListarUsuarios')(tB), /login novamente/i, 'token antigo de B não pode continuar valendo como PMO');
+  // B entra de novo, agora como Engenharia, e não consegue mexer em usuários
+  const tB2 = s.g('login')('pmo2@hospital.org', 'senha-PMO').token;
+  const A = s.g('apiListarUsuarios')(s.token).find(u => u.Papel === 'PMO');
+  assert.throws(() => s.g('apiDesativarUsuario')(tB2, A.ID), /restrita/i);
+  // desativado: sessão cai e o login é recusado
+  s.g('apiDesativarUsuario')(s.token, B.ID);
+  assert.throws(() => s.g('apiListarObras')(tB2), /login novamente/i);
+  assert.throws(() => s.g('login')('pmo2@hospital.org', 'senha-PMO'), /incorretos/i);
+});
+
+teste('o último PMO ativo não pode ser desativado nem rebaixado', () => {
+  const s = sistemaComPmo();
+  const usuarios = () => s.g('readAll_')('Usuarios', s.g('USUARIOS_HEADERS'));
+  const A = usuarios()[0];
+  assert.throws(() => s.g('garantirOutroPmoAtivo_')(usuarios(), A.ID), /último PMO/);
+  criarUsuario(s, 'PMO', 'pmo2@hospital.org');
+  s.g('garantirOutroPmoAtivo_')(usuarios(), A.ID); // com dois PMOs, passa
+  assert.throws(() => s.g('apiSalvarUsuario')(s.token, { ID: A.ID, Nome: A.Nome, Email: A.Email, Papel: 'Engenharia' }), /próprio papel/);
+});
+
+teste('página pública da obra só expõe os campos públicos', () => {
+  const s = sistemaComPmo();
+  const r = s.g('apiSalvarObra')(s.token, { Titulo: 'Obra pública', PrazoManifestacao: '2030-01-01', MotivoCancelamento: 'x' }, []);
+  s.g('apiPublicarObra')(s.token, r.id);
+  const pub = s.g('apiGetObraPublica')(r.id);
+  ['CronogramaObservacoesPMO', 'CanceladoPor', 'MotivoCancelamento', 'IDPedidoOrigem', 'StatusCronograma']
+    .forEach(c => assert.ok(!(c in pub.obra), c + ' não deveria ser público'));
+  assert.strictEqual(pub.obra.Titulo, 'Obra pública');
+});
+
+// ─────────────────────────────── integridade ───────────────────────────────
+
+teste('salvar o cronograma de uma obra não altera nenhuma linha de outra obra', () => {
+  const s = sistemaComPmo();
+  const A = s.g('apiSalvarObra')(s.token, { Titulo: 'Obra A' }, []).id;
+  const B = s.g('apiSalvarObra')(s.token, { Titulo: 'Obra B' }, []).id;
+  const pac = (n, custo) => ({ EtapaIdx: 0, Atividade: n, CustoDoacao: '0', CustoProprio: custo, PredecessoraIdx: [] });
+  s.g('apiSalvarCronograma')(s.token, A, [{ Nome: 'Etapa A' }], [pac('A1', '1500,50'), pac('A2', '10')], false);
+  s.g('apiSalvarCronograma')(s.token, B, [{ Nome: 'Etapa B' }], [pac('B1', '5')], false);
+  const cron = s.amb.aba('Cronograma');
+  const linhasA = () => cron.data.filter(l => l[1] === A).map(l => JSON.stringify(l));
+  const antes = linhasA();
+  // B cresce, encolhe e é reordenado; A tem que ficar byte a byte igual
+  s.g('apiSalvarCronograma')(s.token, B, [{ Nome: 'Etapa B' }], [pac('B1', '5'), pac('B2', '6'), pac('B3', '7')], false);
+  s.g('apiSalvarCronograma')(s.token, B, [{ Nome: 'Etapa B' }], [pac('B3', '7')], false);
+  assert.deepStrictEqual(linhasA(), antes);
+  // o custo de A continua número (não virou texto formatado)
+  assert.strictEqual(typeof cron.data.find(l => l[1] === A && l[4] === 'A1')[10 + 1], 'number');
+  // B ficou exatamente com 1 pacote
+  assert.strictEqual(cron.data.filter(l => l[1] === B).length, 1);
+});
+
+teste('salvar a EAP de uma obra não altera a EAP de outra', () => {
+  const s = sistemaComPmo();
+  const A = s.g('apiSalvarObra')(s.token, { Titulo: 'A' }, [{ Codigo: '1', Descricao: 'EAP A' }]).id;
+  const B = s.g('apiSalvarObra')(s.token, { Titulo: 'B' }, [{ Codigo: '1', Descricao: 'EAP B' }]).id;
+  const eap = s.amb.aba('EAP');
+  const antes = JSON.stringify(eap.data.filter(l => l[1] === A));
+  s.g('apiSalvarObra')(s.token, { ID: B, Titulo: 'B' }, [{ Codigo: '1', Descricao: 'x' }, { Codigo: '2', Descricao: 'y' }]);
+  s.g('apiSalvarObra')(s.token, { ID: B, Titulo: 'B' }, []);
+  assert.strictEqual(JSON.stringify(eap.data.filter(l => l[1] === A)), antes);
+  assert.strictEqual(eap.data.filter(l => l[1] === B).length, 0);
+});
+
+teste('linha vazia no meio da aba não desloca as gravações', () => {
+  const s = sistemaComPmo();
+  const ids = ['1', '2', '3'].map(n => s.g('apiSalvarObra')(s.token, { Titulo: 'Obra ' + n }, []).id);
+  const obras = s.amb.aba('Obras');
+  obras.data[2] = obras.data[2].map(() => ''); // alguém apagou o conteúdo da 2ª obra na planilha
+  s.g('apiMudarStatus')(s.token, ids[2], 'Publicada');
+  const col = s.g('OBRAS_HEADERS').indexOf('Status');
+  assert.strictEqual(obras.data[3][col], 'Publicada', 'a obra 3 deveria ter recebido o status');
+  assert.strictEqual(obras.data[2][col], '', 'a linha apagada não pode ser escrita');
+});
+
+teste('IDs continuam únicos depois de 999 registros no ano', () => {
+  const s = sistemaComPmo();
+  const proximo = s.g('proximoId_');
+  const H = s.g('RISCOS_HEADERS');
+  const sh = s.amb.aba('Riscos');
+  const vistos = new Set();
+  for (let i = 0; i < 1003; i++) {
+    const id = proximo('RISCO', 'Riscos', H, 'ID');
+    assert.ok(!vistos.has(id), 'ID repetido: ' + id);
+    vistos.add(id);
+    sh.appendRow([id, 'O', 'P']);
+  }
+});
+
+teste('ID não é reaproveitado depois que o último registro é excluído', () => {
+  const s = sistemaComPmo();
+  const proximo = s.g('proximoId_');
+  const H = s.g('RISCOS_HEADERS');
+  const sh = s.amb.aba('Riscos');
+  const a = proximo('RISCO', 'Riscos', H, 'ID'); sh.appendRow([a]);
+  const b = proximo('RISCO', 'Riscos', H, 'ID'); sh.appendRow([b]);
+  sh.deleteRow(3);
+  const c = proximo('RISCO', 'Riscos', H, 'ID');
+  assert.notStrictEqual(c, b);
+});
+
+teste('mais de 99 pacotes numa obra geram IDs distintos', () => {
+  const s = sistemaComPmo();
+  const A = s.g('apiSalvarObra')(s.token, { Titulo: 'Grande' }, []).id;
+  const pacotes = Array.from({ length: 120 }, (_, i) => ({ EtapaIdx: 0, Atividade: 'P' + i, PredecessoraIdx: [] }));
+  s.g('apiSalvarCronograma')(s.token, A, [{ Nome: 'E' }], pacotes, false);
+  const ids = s.amb.aba('Cronograma').data.filter(l => l[1] === A).map(l => l[0]);
+  assert.strictEqual(new Set(ids).size, 120);
+});
+
+teste('listas grandes não quebram por causa do limite do cache', () => {
+  const s = sistemaComPmo();
+  const sh = s.amb.aba('Pedidos');
+  const H = s.g('PEDIDOS_HEADERS');
+  for (let i = 0; i < 800; i++) {
+    const l = H.map(() => '');
+    l[0] = 'PED-2026-' + i; l[H.indexOf('FinalidadeObjetivo')] = 'x'.repeat(300); l[H.indexOf('Status')] = 'Novo';
+    sh.appendRow(l);
+  }
+  const lista = s.g('apiListarPedidos')(s.token);
+  assert.strictEqual(lista.length, 800);
+  assert.strictEqual(s.g('apiKanban')(s.token).pedidos.length, 800);
+});
+
+// ─────────────────────────────── fluxo completo ───────────────────────────────
+
+teste('fluxo completo de exemplo (pedido → obra → cronograma → baseline → medições) roda sem erro', () => {
+  const s = sistemaComPmo();
+  const msg = s.g('criarProjetosExemplo')();
+  assert.match(msg, /PROJETO 1/);
+  assert.match(msg, /PROJETO 2/);
+  const obras = s.g('apiListarObras')(s.token);
+  assert.strictEqual(obras.length, 2);
+  const det = s.g('apiGetObraAdmin')(s.token, obras[0].ID);
+  assert.ok(det.cronograma.length >= 3);
+  assert.ok(s.g('apiGetBaseline')(s.token, obras[0].ID).length >= 3);
+});
+
+// ─────────────────────────────── execução ───────────────────────────────
+
+const soNome = process.argv[2];
+let falhas = 0;
+testes.filter(t => !soNome || t.nome.indexOf(soNome) >= 0).forEach(t => {
+  try {
+    t.fn();
+    console.log('  ok   ' + t.nome);
+  } catch (e) {
+    falhas++;
+    console.log('  FALHOU ' + t.nome + '\n         ' + String(e && e.message || e).split('\n')[0]);
+  }
+});
+console.log(falhas ? '\n' + falhas + ' teste(s) falharam' : '\nTodos os ' + testes.length + ' testes passaram');
+process.exit(falhas ? 1 : 0);
